@@ -1,20 +1,27 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 from io import BytesIO
+import time
 
-def fetch_salesforce_status(url):
+def init_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
+
+def fetch_salesforce_status(driver, url):
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code != 200:
-            return "Not Found"
+        driver.get(url)
+        time.sleep(3)  # wait for page to load completely
+        page_text = driver.page_source
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_text = soup.get_text(" ", strip=True)
-
-        # Keywords to check
-        if "Salesforce MVP" in page_text or "Legend" in page_text:
+        if "Legend" in page_text or "Salesforce MVP" in page_text:
             return "Legend"
         elif "Champion" in page_text:
             return "Champion"
@@ -25,7 +32,7 @@ def fetch_salesforce_status(url):
     except Exception as e:
         return "Error"
 
-st.title("Salesforce Profile Checker")
+st.title("Salesforce Profile Checker (Selenium Powered)")
 
 uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
 
@@ -35,10 +42,17 @@ if uploaded_file:
     if not {"Roll Number", "Name", "Salesforce URL"}.issubset(df.columns):
         st.error("CSV must have columns: Roll Number, Name, Salesforce URL")
     else:
-        st.write("Processing profiles...")
+        st.write("🚀 Launching browser... Please wait.")
 
-        # Fetch status for each row
-        df["Status"] = df["Salesforce URL"].apply(fetch_salesforce_status)
+        driver = init_driver()
+
+        statuses = []
+        for url in df["Salesforce URL"]:
+            status = fetch_salesforce_status(driver, url)
+            statuses.append(status)
+
+        df["Status"] = statuses
+        driver.quit()
 
         st.dataframe(df)
 
