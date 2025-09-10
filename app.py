@@ -15,9 +15,12 @@ def init_driver():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
 
-    # Find chromium/chromedriver installed by packages.txt
-    chrome_path = shutil.which("chromium-browser")
-    driver_path = shutil.which("chromedriver")
+    # Try multiple possible binary names for chromium & chromedriver
+    chrome_path = shutil.which("chromium") or shutil.which("chromium-browser")
+    driver_path = shutil.which("chromedriver") or shutil.which("chromium-driver")
+
+    if not chrome_path or not driver_path:
+        raise Exception(f"Chromium or Chromedriver not found. Got: {chrome_path}, {driver_path}")
 
     chrome_options.binary_location = chrome_path
     service = Service(driver_path)
@@ -29,7 +32,7 @@ def init_driver():
 def fetch_salesforce_status(driver, url):
     try:
         driver.get(url)
-        time.sleep(3)  # wait for dynamic content to load
+        time.sleep(3)  # wait for page load
         page_text = driver.page_source
 
         if "Legend" in page_text or "Salesforce MVP" in page_text:
@@ -59,9 +62,13 @@ if uploaded_file:
         driver = init_driver()
         statuses = []
 
-        for url in df["Salesforce URL"]:
+        progress = st.progress(0)
+        total = len(df)
+
+        for i, url in enumerate(df["Salesforce URL"], start=1):
             status = fetch_salesforce_status(driver, url)
             statuses.append(status)
+            progress.progress(i / total)
 
         driver.quit()
 
