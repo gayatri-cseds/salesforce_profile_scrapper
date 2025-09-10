@@ -32,7 +32,15 @@ def init_driver():
 def fetch_salesforce_status(driver, url):
     try:
         driver.get(url)
-        time.sleep(3)  # wait for page load
+
+        # Wait up to 10s for the badge section to load
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "th-stamp-collection"))
+            )
+        except:
+            pass  # still continue even if not found
+
         page_text = driver.page_source
 
         if "Legend" in page_text or "Salesforce MVP" in page_text:
@@ -43,8 +51,8 @@ def fetch_salesforce_status(driver, url):
             return "Innovator"
         else:
             return "Not Found"
-    except Exception:
-        return "Error"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # Streamlit App
 st.title("🚀 Salesforce Profile Checker")
