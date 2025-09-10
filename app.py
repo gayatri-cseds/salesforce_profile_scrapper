@@ -1,95 +1,77 @@
 import streamlit as st
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-import shutil
+import requests
+import re
 import time
-from io import BytesIO
 
-# Initialize Chrome + Chromedriver
-def init_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-
-    # Try multiple possible binary names for chromium & chromedriver
-    chrome_path = shutil.which("chromium") or shutil.which("chromium-browser")
-    driver_path = shutil.which("chromedriver") or shutil.which("chromium-driver")
-
-    if not chrome_path or not driver_path:
-        raise Exception(f"Chromium or Chromedriver not found. Got: {chrome_path}, {driver_path}")
-
-    chrome_options.binary_location = chrome_path
-    service = Service(driver_path)
-
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
-
-# Function to fetch Salesforce profile status
-def fetch_salesforce_status(driver, url):
+def extract_badge(profile_url):
+    """Simple badge extraction - just the basics"""
     try:
-        driver.get(url)
-
-        # Wait up to 10s for the badge section to load
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "th-stamp-collection"))
-            )
-        except:
-            pass  # still continue even if not found
-
-        page_text = driver.page_source
-
-        if "Legend" in page_text or "Salesforce MVP" in page_text:
-            return "Legend"
-        elif "Champion" in page_text:
-            return "Champion"
-        elif "Innovator" in page_text:
-            return "Innovator"
+        if not profile_url.startswith('http'):
+            profile_url = f"https://{profile_url}"
+        
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(profile_url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            return {'label_badge': 'Error', 'status': 'Cannot Access'}
+        
+        content = response.text.lower()
+        
+        # Simple text search
+        if 'legend' in content:
+            return {'label_badge': 'Legend', 'status': 'Success'}
+        elif 'champion' in content:
+            return {'label_badge': 'Champion', 'status': 'Success'}
+        elif 'innovator' in content:
+            return {'label_badge': 'Innovator', 'status': 'Success'}
         else:
-            return "Not Found"
-    except Exception as e:
-        return f"Error: {str(e)}"
+            return {'label_badge': 'None', 'status': 'No Badge'}
+            
+    except:
+        return {'label_badge': 'Error', 'status': 'Failed'}
 
-# Streamlit App
-st.title("🚀 Salesforce Profile Checker")
+def main():
+    st.title("🏅 Badge Checker - Simple")
+    
+    uploaded_file = st.file_uploader("Upload CSV", type=['csv'])
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        st.dataframe(df.head())
+        
+        # Column selection
+        columns = df.columns.tolist()
+        name_col = st.selectbox("Name column:", columns)
+        roll_col = st.selectbox("Roll number column:", columns)
+        url_col = st.selectbox("URL column:", columns)
+        
+        if st.button("Check Badges"):
+            results = []
+            progress = st.progress(0)
+            
+            for i, row in df.iterrows():
+                st.text(f"Processing {i+1}/{len(df)}: {row[name_col]}")
+                
+                result = extract_badge(row[url_col])
+                
+                results.append({
+                    'name': row[name_col],
+                    'roll_number': row[roll_col],
+                    'url': row[url_col],
+                    'label_badge': result['label_badge'],
+                    'status': result['status']
+                })
+                
+                progress.progress((i+1)/len(df))
+                time.sleep(1)
+            
+            result_df = pd.DataFrame(results)
+            st.dataframe(result_df)
+            
+            # Download
+            csv = result_df.to_csv(index=False)
+            st.download_button("Download Results", csv, "badges.csv")
 
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
-
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-
-    if not {"Roll Number", "Name", "Salesforce URL"}.issubset(df.columns):
-        st.error("CSV must have columns: Roll Number, Name, Salesforce URL")
-    else:
-        st.info("Launching Selenium browser... Please wait ⏳")
-
-        driver = init_driver()
-        statuses = []
-
-        progress = st.progress(0)
-        total = len(df)
-
-        for i, url in enumerate(df["Salesforce URL"], start=1):
-            status = fetch_salesforce_status(driver, url)
-            statuses.append(status)
-            progress.progress(i / total)
-
-        driver.quit()
-
-        df["Status"] = statuses
-        st.success("✅ Profiles processed successfully!")
-        st.dataframe(df)
-
-        # Download enriched CSV
-        output = BytesIO()
-        df.to_csv(output, index=False)
-        st.download_button(
-            label="Download Updated CSV",
-            data=output.getvalue(),
-            file_name="salesforce_profiles.csv",
-            mime="text/csv"
-        )
+if __name__ == "__main__":
+    main()
