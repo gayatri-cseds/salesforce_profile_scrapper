@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+import re
 import time
 
 def extract_label_badge_only(profile_url):
-    """Extract only label badge - works on Streamlit Cloud"""
+    """Fixed badge extraction with proper priority and exact matching"""
     try:
         if not profile_url.startswith('http'):
             profile_url = f"https://{profile_url}"
@@ -17,13 +17,15 @@ def extract_label_badge_only(profile_url):
         response = requests.get(profile_url, headers=headers, timeout=10)
         page_content = response.text.lower()
         
-        # Priority order: Legend > Innovator > Champion
-        if 'agentblazer legend' in page_content or 'legend' in page_content:
+        # FIXED: Use regex word boundaries for exact matching
+        # Priority: Legend > Champion > Innovator (highest to lowest)
+        
+        if re.search(r'\blegend\b', page_content) or 'agentblazer legend' in page_content:
             return {'label_badge': 'Legend', 'status': 'Success'}
-        elif 'agentblazer innovator' in page_content or 'innovator' in page_content:
-            return {'label_badge': 'Innovator', 'status': 'Success'}
-        elif 'agentblazer champion' in page_content or 'champion' in page_content:
+        elif re.search(r'\bchampion\b', page_content) or 'agentblazer champion' in page_content:
             return {'label_badge': 'Champion', 'status': 'Success'}
+        elif re.search(r'\binnovator\b', page_content) or 'agentblazer innovator' in page_content:
+            return {'label_badge': 'Innovator', 'status': 'Success'}
         else:
             return {'label_badge': 'None', 'status': 'No Badge Found'}
             
@@ -31,7 +33,7 @@ def extract_label_badge_only(profile_url):
         return {'label_badge': 'Error', 'status': f'Error: {str(e)}'}
 
 def process_csv_for_labels(df):
-    """Process CSV to extract only label badges"""
+    """Process CSV with improved badge detection"""
     result_df = df.copy()
     result_df['label_badge'] = ''
     result_df['status'] = ''
@@ -58,24 +60,31 @@ def process_csv_for_labels(df):
     status_text.text('Badge extraction complete!')
     return result_df
 
-# Streamlit App
+# Main Streamlit App
 def main():
     st.set_page_config(
-        page_title="Agentblazer Badge Checker",
+        page_title="Fixed Agentblazer Badge Checker",
         page_icon="🏅",
         layout="wide"
     )
     
-    st.title("🏅 Agentblazer Label Badge Checker")
-    st.markdown("Extract **Champion/Innovator/Legend** badges from Trailblazer profiles")
+    st.title("🏅 Agentblazer Badge Checker (Fixed)")
+    st.markdown("Extract **Champion/Innovator/Legend** badges with improved accuracy")
     
-    # Info about badges
-    st.info("""
-    **Agentblazer Badge Levels:**
-    - 🥉 **Champion**: Foundational AI knowledge
-    - 🥈 **Innovator**: Implementing AI solutions  
-    - 🥇 **Legend**: Advanced AI expertise
-    """)
+    # Badge hierarchy explanation
+    with st.expander("📋 Badge Hierarchy & Detection Logic"):
+        st.markdown("""
+        **Detection Priority (Highest to Lowest):**
+        1. 🥇 **Legend** - Most advanced badge
+        2. 🥈 **Champion** - Mid-level badge  
+        3. 🥉 **Innovator** - Entry-level badge
+        4. ❌ **None** - No badge detected
+        
+        **Fixed Logic:**
+        - Uses regex word boundaries for exact matching
+        - Prevents false positives from partial text matches
+        - Correct priority order (Legend > Champion > Innovator)
+        """)
     
     # File upload
     uploaded_file = st.file_uploader("📁 Upload CSV File", type=['csv'])
@@ -102,8 +111,8 @@ def main():
                 col_url = st.selectbox("Salesforce URL:", columns, index=2 if len(columns) > 2 else 0)
             
             # Process button
-            if st.button("🏅 Check Agentblazer Badges", type="primary"):
-                st.header("⚡ Checking Badges")
+            if st.button("🏅 Check Badges (Fixed Logic)", type="primary"):
+                st.header("⚡ Processing with Fixed Logic")
                 
                 # Rename columns
                 df_processed = df.rename(columns={
@@ -112,40 +121,57 @@ def main():
                     col_url: 'salesforce_url'
                 })
                 
-                # Process data
+                # Process with fixed logic
                 result_df = process_csv_for_labels(df_processed)
                 
                 # Results summary
-                st.header("📈 Badge Summary")
+                st.header("📈 Corrected Badge Summary")
                 
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 
                 with col1:
                     total = len(result_df)
                     st.metric("Total Checked", total)
                 
                 with col2:
-                    champions = len(result_df[result_df['label_badge'] == 'Champion'])
-                    st.metric("Champions", champions)
+                    legends = len(result_df[result_df['label_badge'] == 'Legend'])
+                    st.metric("🥇 Legends", legends)
                 
                 with col3:
-                    innovators = len(result_df[result_df['label_badge'] == 'Innovator'])
-                    st.metric("Innovators", innovators)
+                    champions = len(result_df[result_df['label_badge'] == 'Champion'])
+                    st.metric("🥈 Champions", champions)
                 
                 with col4:
-                    legends = len(result_df[result_df['label_badge'] == 'Legend'])
-                    st.metric("Legends", legends)
+                    innovators = len(result_df[result_df['label_badge'] == 'Innovator'])
+                    st.metric("🥉 Innovators", innovators)
                 
-                # Results table
-                st.subheader("📋 Badge Results")
-                st.dataframe(result_df)
+                with col5:
+                    none_badges = len(result_df[result_df['label_badge'] == 'None'])
+                    st.metric("❌ No Badge", none_badges)
+                
+                # Results table with color coding
+                st.subheader("📋 Detailed Results")
+                
+                # Color code the results
+                def color_badges(val):
+                    if val == 'Legend':
+                        return 'background-color: gold'
+                    elif val == 'Champion':
+                        return 'background-color: silver'
+                    elif val == 'Innovator':
+                        return 'background-color: #CD7F32'  # Bronze
+                    else:
+                        return ''
+                
+                styled_df = result_df.style.applymap(color_badges, subset=['label_badge'])
+                st.dataframe(styled_df)
                 
                 # Download
                 csv_output = result_df.to_csv(index=False)
                 st.download_button(
-                    label="💾 Download Badge Results",
+                    label="💾 Download Fixed Results",
                     data=csv_output,
-                    file_name="agentblazer_badges.csv",
+                    file_name="agentblazer_badges_fixed.csv",
                     mime="text/csv"
                 )
                 
