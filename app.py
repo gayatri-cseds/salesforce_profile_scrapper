@@ -1,286 +1,341 @@
 import streamlit as st
 import pandas as pd
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import time
-import re
 from bs4 import BeautifulSoup
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
 
-def setup_selenium():
-    """Setup Selenium with proper configuration for Salesforce"""
-    chrome_options = Options()
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
+def extract_trailblazer_badges(profile_url):
+    """
+    Extract badge information from trailblazer.me profiles
+    """
     try:
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        return driver
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive'
+        }
+        
+        response = requests.get(profile_url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Method 1: Extract from tally counts (proven to work)
+        badge_count = extract_badge_count(soup)
+        points_count = extract_points_count(soup) 
+        
+        # Method 2: Look for rank information
+        rank_info = extract_rank_from_profile(soup)
+        
+        # Method 3: Look for specific badge level indicators
+        level_info = extract_level_indicators(soup)
+        
+        # Determine badge level based on extracted data
+        badge_level = determine_badge_level(badge_count, points_count, rank_info, level_info)
+        
+        return {
+            'badge_count': badge_count,
+            'points': points_count,
+            'rank': rank_info,
+            'level': badge_level,
+            'status': 'Success'
+        }
+        
+    except requests.RequestException as e:
+        return {'status': 'Connection Error', 'level': 'Error', 'error': str(e)}
     except Exception as e:
-        st.error(f"Selenium setup failed: {e}")
-        return None
+        return {'status': 'Parse Error', 'level': 'Error', 'error': str(e)}
 
-def extract_badges_selenium(url, driver):
-    """Extract badges using Selenium with comprehensive detection"""
+def extract_badge_count(soup):
+    """Extract badge count using known CSS classes"""
     try:
-        st.info(f"🔍 Processing: {url}")
+        # Look for tally count elements (from StackOverflow examples)
+        tally_elements = soup.find_all(['span', 'div'], 
+                                     class_=re.compile(r'tds-tally__count|count|badge'))
         
-        # Load the page
-        driver.get(url)
+        for element in tally_elements:
+            text = element.get_text().strip()
+            if text.isdigit():
+                count = int(text)
+                if 1 <= count <= 1000:  # Reasonable badge count range
+                    return count
         
-        # Wait for the page to load completely
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
+        # Alternative: look for numbers near "badge" text
+        badge_sections = soup.find_all(string=re.compile(r'badge', re.I))
+        for section in badge_sections:
+            parent = section.parent
+            if parent:
+                numbers = re.findall(r'\b(\d+)\b', parent.get_text())
+                for num in numbers:
+                    if 1 <= int(num) <= 1000:
+                        return int(num)
         
-        # Scroll to load dynamic content
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(3)
+        return 0
         
-        # Try to find badge information in multiple ways
-        page_source = driver.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
-        
-        # Method 1: Look for rank information
-        rank_info = extract_rank_info(soup, driver)
-        if rank_info != "None":
-            return rank_info
-        
-        # Method 2: Look for badge counts/points
-        badge_info = extract_badge_count_info(soup, driver)
-        if badge_info != "None":
-            return badge_info
-        
-        # Method 3: Look for specific badge images
-        image_info = extract_image_badges(soup, driver)
-        if image_info != "None":
-            return image_info
-        
-        return "None"
-        
-    except Exception as e:
-        st.error(f"Error processing {url}: {str(e)}")
-        return "Error"
+    except Exception:
+        return 0
 
-def extract_rank_info(soup, driver):
-    """Extract rank information from various page elements"""
-    
-    # Look for rank text patterns
-    rank_patterns = [
-        (r'ranger', 'Legend'),
-        (r'expeditioner', 'Legend'), 
-        (r'mountaineer', 'Innovator'),
-        (r'adventurer', 'Champion'),
-        (r'explorer', 'Champion'),
-        (r'hiker', 'Novice')
-    ]
-    
-    # Search in text content
-    page_text = soup.get_text().lower()
-    for pattern, level in rank_patterns:
-        if re.search(pattern, page_text):
-            return level
-    
-    # Search in specific elements
+def extract_points_count(soup):
+    """Extract points count"""
     try:
-        # Look for rank elements by common class patterns
-        rank_elements = driver.find_elements(By.CSS_SELECTOR, "[class*='rank'], [class*='level'], [class*='badge']")
+        # Look for points indicators
+        points_elements = soup.find_all(['span', 'div'], 
+                                      class_=re.compile(r'point|tally'))
+        
+        for element in points_elements:
+            text = element.get_text().strip().replace(',', '')
+            # Look for larger numbers that could be points
+            numbers = re.findall(r'\b(\d+)\b', text)
+            for num in numbers:
+                if int(num) >= 100:  # Points are usually higher than badge counts
+                    return int(num)
+        
+        return 0
+        
+    except Exception:
+        return 0
+
+def extract_rank_from_profile(soup):
+    """Extract rank information from profile"""
+    try:
+        # Common rank patterns from the research
+        rank_patterns = [
+            'ranger', 'expeditioner', 'mountaineer', 
+            'adventurer', 'explorer', 'hiker'
+        ]
+        
+        page_text = soup.get_text().lower()
+        
+        for rank in rank_patterns:
+            if rank in page_text:
+                return rank.title()
+        
+        # Look in specific elements
+        rank_elements = soup.find_all(['h1', 'h2', 'h3', 'span', 'div'], 
+                                    class_=re.compile(r'rank|title|level'))
         
         for element in rank_elements:
-            text = element.text.lower()
-            for pattern, level in rank_patterns:
-                if pattern in text:
-                    return level
-    except:
-        pass
-    
-    return "None"
+            text = element.get_text().lower()
+            for rank in rank_patterns:
+                if rank in text:
+                    return rank.title()
+        
+        return "Unknown"
+        
+    except Exception:
+        return "Unknown"
 
-def extract_badge_count_info(soup, driver):
-    """Extract information based on badge counts"""
+def extract_level_indicators(soup):
+    """Look for specific level indicators"""
     try:
-        # Look for numerical indicators
-        numbers = re.findall(r'\b\d+\b', soup.get_text())
-        
-        # Convert to integers and look for typical badge counts
-        badge_counts = [int(n) for n in numbers if n.isdigit() and 1 <= int(n) <= 1000]
-        
-        if badge_counts:
-            max_badges = max(badge_counts)
-            
-            # Estimate level based on badge count
-            if max_badges >= 100:
-                return "Legend"
-            elif max_badges >= 50:
-                return "Innovator" 
-            elif max_badges >= 20:
-                return "Champion"
-            elif max_badges >= 5:
-                return "Explorer"
-        
-    except:
-        pass
-    
-    return "None"
-
-def extract_image_badges(soup, driver):
-    """Extract badges from image sources"""
-    
-    try:
-        # Look for all images
+        # Look for level-specific images or text
         images = soup.find_all('img')
         
-        badge_patterns = [
-            (r'ranger|legend|level.*3', 'Legend'),
-            (r'mountaineer|innovator|level.*2', 'Innovator'),
-            (r'adventurer|champion|level.*1', 'Champion')
+        level_patterns = [
+            (r'level.*3|legend|ranger', 'Legend'),
+            (r'level.*2|innovator|mountaineer', 'Innovator'),
+            (r'level.*1|champion|adventurer', 'Champion')
         ]
         
         for img in images:
             src = str(img.get('src', '')).lower()
             alt = str(img.get('alt', '')).lower()
             
-            for pattern, level in badge_patterns:
+            for pattern, level in level_patterns:
                 if re.search(pattern, src) or re.search(pattern, alt):
                     return level
-                    
-    except:
-        pass
+        
+        return "None"
+        
+    except Exception:
+        return "None"
+
+def determine_badge_level(badge_count, points, rank, level_indicator):
+    """Determine final badge level based on all available data"""
     
-    return "None"
+    # Priority 1: Direct level indicators
+    if level_indicator and level_indicator != "None":
+        return level_indicator
+    
+    # Priority 2: Rank-based mapping (from research)
+    rank_mapping = {
+        'Ranger': 'Legend',        # 50,000+ points
+        'Expeditioner': 'Legend',  # 35,000+ points  
+        'Mountaineer': 'Innovator', # 18,000+ points
+        'Adventurer': 'Champion',   # 9,000+ points
+        'Explorer': 'Champion',     # 3,000+ points
+        'Hiker': 'Novice'          # 500+ points
+    }
+    
+    if rank in rank_mapping:
+        return rank_mapping[rank]
+    
+    # Priority 3: Points-based estimation
+    if points >= 35000:
+        return 'Legend'
+    elif points >= 18000:
+        return 'Innovator'
+    elif points >= 9000:
+        return 'Champion'
+    elif points >= 3000:
+        return 'Explorer'
+    
+    # Priority 4: Badge count estimation
+    if badge_count >= 100:
+        return 'Legend'
+    elif badge_count >= 50:
+        return 'Innovator'
+    elif badge_count >= 20:
+        return 'Champion'
+    elif badge_count >= 5:
+        return 'Explorer'
+    
+    return 'None'
 
 def main():
     st.set_page_config(
-        page_title="Salesforce Badge Extractor - Enhanced",
-        page_icon="🚀",
+        page_title="Trailblazer.me Badge Extractor",
+        page_icon="🎯",
         layout="wide"
     )
     
-    st.title("🚀 Enhanced Salesforce Badge Extractor")
-    st.success("✅ This version uses browser automation to handle dynamic content!")
+    st.title("🎯 Trailblazer.me Badge Extractor")
+    st.success("✅ Optimized for trailblazer.me profiles!")
     
-    # Single profile testing
+    # URL format info
+    st.info("""
+    **Expected URL Format**: `https://trailblazer.me/id/username`
+    
+    **Example**: `https://trailblazer.me/id/aarathisreeballa`
+    """)
+    
+    # Single profile test
     st.subheader("🧪 Test Single Profile")
     
     test_url = st.text_input(
         "Test Profile URL:",
-        placeholder="https://www.salesforce.com/trailblazer/username"
+        placeholder="https://trailblazer.me/id/username",
+        value="https://trailblazer.me/id/aarathisreeballa"
     )
     
     if st.button("🔍 Test Profile"):
         if test_url:
-            driver = setup_selenium()
-            if driver:
-                try:
-                    with st.spinner("Processing profile..."):
-                        result = extract_badges_selenium(test_url, driver)
-                        
-                        st.subheader("Results:")
-                        if result == "None":
-                            st.warning("❌ No badges detected or profile may be private")
-                        elif result == "Error":
-                            st.error("❌ Error processing profile")
-                        else:
-                            st.success(f"🎉 Badge Level Detected: **{result}**")
-                            
-                finally:
-                    driver.quit()
+            with st.spinner("Extracting badge data..."):
+                result = extract_trailblazer_badges(test_url)
+                
+                st.subheader("🎯 Extraction Results:")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Badge Count", result.get('badge_count', 0))
+                with col2:
+                    st.metric("Points", result.get('points', 0))
+                with col3:
+                    st.metric("Rank", result.get('rank', 'Unknown'))
+                with col4:
+                    st.metric("Level", result.get('level', 'None'))
+                
+                if result.get('status') == 'Success':
+                    st.success(f"✅ **Final Badge Level: {result['level']}**")
+                else:
+                    st.error(f"❌ {result['status']}: {result.get('error', 'Unknown error')}")
+                
+                st.json(result)
     
     st.divider()
     
     # Batch processing
     st.subheader("📂 Batch Processing")
     
-    uploaded_file = st.file_uploader("Upload CSV File", type="csv")
+    uploaded_file = st.file_uploader(
+        "Upload CSV with trailblazer.me URLs", 
+        type="csv",
+        help="CSV should have columns: Roll Number, Name, Salesforce URL (using trailblazer.me format)"
+    )
     
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
         
+        # Validate columns
         required_cols = ['Roll Number', 'Name', 'Salesforce URL']
         if all(col in df.columns for col in required_cols):
             
             st.success(f"✅ Loaded {len(df)} records")
             st.dataframe(df.head())
             
+            # Validate URL format
+            sample_urls = df['Salesforce URL'].head(3).tolist()
+            trailblazer_me_count = sum(1 for url in sample_urls if 'trailblazer.me' in url)
+            
+            if trailblazer_me_count == 0:
+                st.warning("⚠️ URLs don't seem to be in trailblazer.me format. Please ensure URLs are like: https://trailblazer.me/id/username")
+            
             if st.button("🚀 Process All Profiles"):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                results = []
                 
-                driver = setup_selenium()
-                if not driver:
-                    st.error("❌ Failed to setup browser automation")
-                    return
+                for idx, row in df.iterrows():
+                    progress = (idx + 1) / len(df)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing {idx + 1}/{len(df)}: {row['Name']}")
+                    
+                    result = extract_trailblazer_badges(row['Salesforce URL'])
+                    
+                    results.append({
+                        'Roll Number': row['Roll Number'],
+                        'Name': row['Name'],
+                        'Salesforce URL': row['Salesforce URL'],
+                        'Badge Count': result.get('badge_count', 0),
+                        'Points': result.get('points', 0),
+                        'Rank': result.get('rank', 'Unknown'),
+                        'Badge Status': result.get('level', 'None'),
+                        'Status': result.get('status', 'Unknown')
+                    })
+                    
+                    # Small delay to be respectful
+                    time.sleep(1)
                 
-                try:
-                    progress_bar = st.progress(0)
-                    results = []
-                    
-                    for idx, row in df.iterrows():
-                        progress = (idx + 1) / len(df)
-                        progress_bar.progress(progress)
-                        
-                        st.write(f"Processing {idx + 1}/{len(df)}: {row['Name']}")
-                        
-                        badge_level = extract_badges_selenium(row['Salesforce URL'], driver)
-                        
-                        # Map to standardized levels
-                        level_mapping = {
-                            'Legend': 'Level 3',
-                            'Innovator': 'Level 2',
-                            'Champion': 'Level 1',
-                            'Explorer': 'Level 0',
-                            'None': 'None',
-                            'Error': 'Error'
-                        }
-                        
-                        results.append({
-                            'Roll Number': row['Roll Number'],
-                            'Name': row['Name'],
-                            'Salesforce URL': row['Salesforce URL'],
-                            'Badge Status': badge_level,
-                            'Level': level_mapping.get(badge_level, 'Unknown')
-                        })
-                        
-                        # Small delay to avoid overloading
-                        time.sleep(2)
-                    
-                    # Display results
-                    results_df = pd.DataFrame(results)
-                    
-                    st.subheader("📊 Final Results")
-                    st.dataframe(results_df)
-                    
-                    # Summary
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total", len(results_df))
-                    with col2:
-                        champions = len(results_df[results_df['Badge Status'] == 'Champion'])
-                        st.metric("Champions", champions)
-                    with col3:
-                        innovators = len(results_df[results_df['Badge Status'] == 'Innovator'])
-                        st.metric("Innovators", innovators)  
-                    with col4:
-                        legends = len(results_df[results_df['Badge Status'] == 'Legend'])
-                        st.metric("Legends", legends)
-                    
-                    # Download
-                    csv_data = results_df.to_csv(index=False)
-                    st.download_button(
-                        "📥 Download Results",
-                        csv_data,
-                        "badge_extraction_results.csv",
-                        "text/csv"
-                    )
-                    
-                finally:
-                    driver.quit()
+                # Display results
+                results_df = pd.DataFrame(results)
+                
+                st.subheader("📊 Final Results")
+                st.dataframe(results_df)
+                
+                # Summary stats
+                st.subheader("📈 Summary")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Processed", len(results_df))
+                with col2:
+                    champions = len(results_df[results_df['Badge Status'] == 'Champion'])
+                    st.metric("Champions", champions)
+                with col3:
+                    innovators = len(results_df[results_df['Badge Status'] == 'Innovator'])
+                    st.metric("Innovators", innovators)
+                with col4:
+                    legends = len(results_df[results_df['Badge Status'] == 'Legend'])
+                    st.metric("Legends", legends)
+                
+                # Success rate
+                successful = len(results_df[results_df['Status'] == 'Success'])
+                success_rate = (successful / len(results_df)) * 100
+                st.metric("Success Rate", f"{success_rate:.1f}%")
+                
+                # Download results
+                csv_data = results_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Results",
+                    csv_data,
+                    "trailblazer_badge_results.csv",
+                    "text/csv"
+                )
         else:
             st.error(f"❌ Missing required columns: {required_cols}")
 
