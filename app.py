@@ -4,31 +4,23 @@ import requests
 from bs4 import BeautifulSoup
 import re
 
-# --- Mapping logic ---
-LEVEL_MAP = {
-    "level-1": "Champion",
-    "level-2": "Innovator",
-    "level-3": "Legend"
-}
-
 def fetch_badge_status(profile_url):
-    """Fetch Salesforce Trailblazer badge level from profile URL"""
+    """Fetch Salesforce Trailblazer badge status using <img alt> attribute"""
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(profile_url, headers=headers, timeout=10)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
 
-        # Find image with 'banner-level-X.png'
+        # Find the image with "banner-level" in its src
         img_tag = soup.find("img", {"src": re.compile(r"banner-level-\d+\.png")})
-        if img_tag:
-            match = re.search(r"banner-(level-\d+)\.png", img_tag["src"])
-            if match:
-                level = match.group(1)
-                return LEVEL_MAP.get(level, "None")
-        return "None"   # No badge found
+        if img_tag and img_tag.get("alt"):
+            return img_tag["alt"]  # keep exact alt text (e.g., "Agentblazer Innovator")
+
+        return "None"  # No badge found
     except Exception:
-        return "None"   # Error also treated as None
+        return "None"
+
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Salesforce Badge Dashboard", page_icon="🏆", layout="wide")
