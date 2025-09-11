@@ -12,3 +12,4 @@ numpy
 scrapy
 twisted
 scrapy-splash
+langchain
