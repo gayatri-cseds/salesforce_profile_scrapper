@@ -1,298 +1,496 @@
 import streamlit as st
 import pandas as pd
-import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
+import subprocess
+import os
 import time
-import re
+import tempfile
+import csv
+from pathlib import Path
 
-def setup_driver():
-    """Setup Chrome driver for real scraping"""
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+class ScrapyRunner:
+    """Class to handle Scrapy operations within Streamlit"""
     
-    try:
-        driver = webdriver.Chrome(options=options)
-        return driver
-    except Exception as e:
-        st.error(f"Chrome driver setup failed: {e}")
-        return None
+    def __init__(self):
+        self.project_dir = Path(__file__).parent / "scrapy_project"
+        self.ensure_project_structure()
+    
+    def ensure_project_structure(self):
+        """Create Scrapy project structure if it doesn't exist"""
+        
+        # Create directories
+        (self.project_dir / "salesforce_badges").mkdir(parents=True, exist_ok=True)
+        (self.project_dir / "salesforce_badges" / "spiders").mkdir(exist_ok=True)
+        
+        # Create __init__.py files
+        (self.project_dir / "salesforce_badges" / "__init__.py").touch()
+        (self.project_dir / "salesforce_badges" / "spiders" / "__init__.py").touch()
+        
+        # Create scrapy.cfg
+        scrapy_cfg = self.project_dir / "scrapy.cfg"
+        if not scrapy_cfg.exists():
+            scrapy_cfg.write_text("""[settings]
+default = salesforce_badges.settings
 
-def extract_agentblazer_badge(profile_url, driver):
+[deploy]
+project = salesforce_badges
+""")
+        
+        # Create settings.py
+        settings_py = self.project_dir / "salesforce_badges" / "settings.py"
+        settings_py.write_text('''
+BOT_NAME = 'salesforce_badges'
+SPIDER_MODULES = ['salesforce_badges.spiders']
+NEWSPIDER_MODULE = 'salesforce_badges.spiders'
+
+# Splash Configuration
+SPLASH_URL = 'http://localhost:8050'
+
+DOWNLOADER_MIDDLEWARES = {
+    'scrapy_splash.SplashCookiesMiddleware': 723,
+    'scrapy_splash.SplashMiddleware': 725,
+    'scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware': 810,
+}
+
+SPIDER_MIDDLEWARES = {
+    'scrapy_splash.SplashDeduplicateArgsMiddleware': 100,
+}
+
+DOWNLOAD_DELAY = 3
+RANDOMIZE_DOWNLOAD_DELAY = True
+CONCURRENT_REQUESTS = 2
+CONCURRENT_REQUESTS_PER_DOMAIN = 1
+
+USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+ROBOTSTXT_OBEY = True
+
+LOG_LEVEL = 'WARNING'
+''')
+        
+        # Create items.py
+        items_py = self.project_dir / "salesforce_badges" / "items.py"
+        items_py.write_text('''
+import scrapy
+
+class BadgeItem(scrapy.Item):
+    roll_number = scrapy.Field()
+    name = scrapy.Field()
+    profile_url = scrapy.Field()
+    badge_level = scrapy.Field()
+    badge_image_url = scrapy.Field()
+    alt_text = scrapy.Field()
+    detection_method = scrapy.Field()
+    status = scrapy.Field()
+''')
+        
+        # Create the spider
+        spider_py = self.project_dir / "salesforce_badges" / "spiders" / "badge_spider.py"
+        spider_py.write_text('''
+import scrapy
+from scrapy_splash import SplashRequest
+import csv
+from salesforce_badges.items import BadgeItem
+
+class AgentblazerSpider(scrapy.Spider):
+    name = 'agentblazer'
+    
+    lua_script = """
+        function main(splash, args)
+            splash:set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+            assert(splash:go(args.url))
+            assert(splash:wait(8))
+            
+            -- Additional wait for dynamic content
+            splash:wait_for_resume([[
+                function() {
+                    setTimeout(function() { splash.resume(); }, 3000);
+                }
+            ]], 5)
+            
+            return splash:html()
+        end
     """
-    Extract the EXACT agentblazer badge image from salesforce.com/trailblazer/ profiles
-    Looking for: <img src="https://trailhead.salesforce.com/agentblazer/banner-level-X.png" alt="Agentblazer ...">
-    """
+    
+    def __init__(self, csv_file=None, *args, **kwargs):
+        super(AgentblazerSpider, self).__init__(*args, **kwargs)
+        self.csv_file = csv_file
+        self.profiles = self.load_profiles() if csv_file else []
+    
+    def load_profiles(self):
+        profiles = []
+        try:
+            with open(self.csv_file, 'r', encoding='utf-8') as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    profiles.append({
+                        'roll_number': row.get('Roll Number', ''),
+                        'name': row.get('Name', ''),
+                        'profile_url': row.get('Salesforce URL', '')
+                    })
+        except Exception as e:
+            self.logger.error(f"Error loading CSV: {e}")
+        return profiles
+    
+    def start_requests(self):
+        for profile in self.profiles:
+            if profile['profile_url']:
+                yield SplashRequest(
+                    url=profile['profile_url'],
+                    callback=self.parse_profile,
+                    endpoint='execute',
+                    args={
+                        'lua_source': self.lua_script,
+                        'wait': 8,
+                        'html': 1,
+                        'timeout': 30
+                    },
+                    meta={'profile': profile}
+                )
+    
+    def parse_profile(self, response):
+        profile = response.meta['profile']
+        
+        item = BadgeItem()
+        item['roll_number'] = profile['roll_number']
+        item['name'] = profile['name']
+        item['profile_url'] = profile['profile_url']
+        
+        # Extract agentblazer badge
+        agentblazer_images = response.xpath('//img[contains(@src, "agentblazer") or contains(@alt, "agentblazer")]')
+        
+        badge_found = False
+        
+        for img in agentblazer_images:
+            src = img.xpath('./@src').get() or ''
+            alt = img.xpath('./@alt').get() or ''
+            
+            if 'banner-level-3.png' in src:
+                item['badge_level'] = 'Legend'
+                item['badge_image_url'] = src
+                item['alt_text'] = alt
+                item['detection_method'] = 'Agentblazer Banner Level 3'
+                item['status'] = 'Success'
+                badge_found = True
+                break
+            elif 'banner-level-2.png' in src:
+                item['badge_level'] = 'Innovator'
+                item['badge_image_url'] = src
+                item['alt_text'] = alt
+                item['detection_method'] = 'Agentblazer Banner Level 2'
+                item['status'] = 'Success'
+                badge_found = True
+                break
+            elif 'banner-level-1.png' in src:
+                item['badge_level'] = 'Champion'
+                item['badge_image_url'] = src
+                item['alt_text'] = alt
+                item['detection_method'] = 'Agentblazer Banner Level 1'
+                item['status'] = 'Success'
+                badge_found = True
+                break
+            
+            # Check alt text as backup
+            alt_lower = alt.lower()
+            if 'legend' in alt_lower:
+                item['badge_level'] = 'Legend'
+                badge_found = True
+            elif 'innovator' in alt_lower:
+                item['badge_level'] = 'Innovator'
+                badge_found = True
+            elif 'champion' in alt_lower:
+                item['badge_level'] = 'Champion'
+                badge_found = True
+            
+            if badge_found:
+                item['badge_image_url'] = src
+                item['alt_text'] = alt
+                item['detection_method'] = 'Alt Text Detection'
+                item['status'] = 'Success'
+                break
+        
+        if not badge_found:
+            item['badge_level'] = 'None'
+            item['badge_image_url'] = ''
+            item['alt_text'] = ''
+            item['detection_method'] = 'No Badge Found'
+            item['status'] = 'No Badge'
+        
+        yield item
+''')
+    
+    def run_spider(self, csv_file_path):
+        """Run Scrapy spider with the given CSV file"""
+        
+        # Change to project directory
+        original_dir = os.getcwd()
+        os.chdir(self.project_dir)
+        
+        try:
+            # Run Scrapy command
+            cmd = [
+                'scrapy', 'crawl', 'agentblazer',
+                '-a', f'csv_file={csv_file_path}',
+                '-o', 'results.csv',
+                '--loglevel=WARNING'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
+            return result.returncode == 0, result.stdout, result.stderr
+            
+        except subprocess.TimeoutExpired:
+            return False, "", "Scraping timeout - process took too long"
+        except Exception as e:
+            return False, "", str(e)
+        finally:
+            os.chdir(original_dir)
+    
+    def get_results(self):
+        """Get results from the scrapy output"""
+        results_file = self.project_dir / "results.csv"
+        if results_file.exists():
+            return pd.read_csv(results_file)
+        return pd.DataFrame()
+
+def check_splash_server():
+    """Check if Splash server is running"""
     try:
-        st.write(f"🔍 Loading: {profile_url}")
-        
-        # Load the profile page
-        driver.get(profile_url)
-        
-        # Wait for page to load completely
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        
-        # Additional wait for dynamic content (badges load via JS)
-        time.sleep(10)  # Increased wait time for JS to load badges
-        
-        # Get page source after JS execution
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        
-        # Method 1: Find EXACT agentblazer banner images
-        all_images = soup.find_all('img')
-        
-        st.write(f"📊 Found {len(all_images)} total images on page")
-        
-        # Look specifically for agentblazer banner images
-        for img in all_images:
-            src = str(img.get('src', ''))
-            alt = str(img.get('alt', ''))
-            
-            # Debug: Show first few images
-            if 'agentblazer' in src.lower() or 'agentblazer' in alt.lower():
-                st.write(f"🎯 **Agentblazer image found:**")
-                st.write(f"- **src:** `{src}`")
-                st.write(f"- **alt:** `{alt}`")
-                
-                # Extract badge level from the EXACT pattern you provided
-                if 'banner-level-3.png' in src:
-                    return {
-                        'badge_level': 'Legend',
-                        'badge_image_url': src,
-                        'alt_text': alt,
-                        'detection_method': 'Agentblazer Banner Level 3',
-                        'status': 'Success'
-                    }
-                elif 'banner-level-2.png' in src:
-                    return {
-                        'badge_level': 'Innovator', 
-                        'badge_image_url': src,
-                        'alt_text': alt,
-                        'detection_method': 'Agentblazer Banner Level 2',
-                        'status': 'Success'
-                    }
-                elif 'banner-level-1.png' in src:
-                    return {
-                        'badge_level': 'Champion',
-                        'badge_image_url': src, 
-                        'alt_text': alt,
-                        'detection_method': 'Agentblazer Banner Level 1',
-                        'status': 'Success'
-                    }
-                
-                # Also check alt text as backup
-                alt_lower = alt.lower()
-                if 'legend' in alt_lower:
-                    return {'badge_level': 'Legend', 'badge_image_url': src, 'alt_text': alt, 'detection_method': 'Alt Text - Legend', 'status': 'Success'}
-                elif 'innovator' in alt_lower:
-                    return {'badge_level': 'Innovator', 'badge_image_url': src, 'alt_text': alt, 'detection_method': 'Alt Text - Innovator', 'status': 'Success'}
-                elif 'champion' in alt_lower:
-                    return {'badge_level': 'Champion', 'badge_image_url': src, 'alt_text': alt, 'detection_method': 'Alt Text - Champion', 'status': 'Success'}
-        
-        # Debug: Show all image sources for troubleshooting
-        st.write("🔍 **Debug - All image sources:**")
-        agentblazer_related = []
-        for i, img in enumerate(all_images[:10]):  # Show first 10 images
-            src = str(img.get('src', ''))
-            alt = str(img.get('alt', ''))
-            
-            if src:  # Only show images with src
-                st.write(f"**Image {i+1}:** `{src[:100]}...` | Alt: `{alt[:50]}...`")
-                
-                # Check for any agentblazer related content
-                if 'agentblazer' in src.lower() or 'agentblazer' in alt.lower() or 'banner' in src.lower():
-                    agentblazer_related.append(f"Image {i+1}: {src}")
-        
-        if agentblazer_related:
-            st.write("🎯 **Potential agentblazer images:**")
-            for img_info in agentblazer_related:
-                st.write(f"- {img_info}")
-        
-        # No agentblazer badge found
-        return {
-            'badge_level': 'None',
-            'badge_image_url': '',
-            'alt_text': '',
-            'detection_method': 'No Agentblazer Badge Found',
-            'status': 'No Badge Found'
-        }
-        
-    except Exception as e:
-        return {
-            'badge_level': 'Error',
-            'badge_image_url': '',
-            'alt_text': '',
-            'detection_method': 'Request Failed',
-            'status': f'Error: {str(e)}'
-        }
+        import requests
+        response = requests.get('http://localhost:8050', timeout=5)
+        return response.status_code == 200
+    except:
+        return False
 
 def main():
     st.set_page_config(
-        page_title="Agentblazer Badge Image Extractor",
-        page_icon="🎯",
+        page_title="Scrapy Badge Extractor",
+        page_icon="🕷️",
         layout="wide"
     )
     
-    st.title("🎯 Agentblazer Badge Image Extractor")
-    st.success("✅ Extracts badge images from salesforce.com/trailblazer/ profiles!")
+    st.title("🕷️ Salesforce Badge Extractor with Scrapy + Splash")
+    st.success("✅ Professional scraping with JavaScript support!")
     
-    st.info("""
-    **Targeting the EXACT pattern you found:**
-    ```
-    <img src="https://trailhead.salesforce.com/agentblazer/banner-level-2.png" alt="Agentblazer Innovator">
-    ```
+    # Check prerequisites
+    st.subheader("🔧 Prerequisites Check")
     
-    **Expected URL format:** `https://www.salesforce.com/trailblazer/username`
-    """)
+    col1, col2 = st.columns(2)
     
-    # Single profile test
-    st.subheader("🧪 Test Single Profile")
+    with col1:
+        # Check Splash server
+        if check_splash_server():
+            st.success("✅ Splash server is running on localhost:8050")
+        else:
+            st.error("❌ Splash server not running")
+            st.info("""
+            **To start Splash server:**
+            ```
+            docker run -p 8050:8050 scrapinghub/splash
+            ```
+            Or install locally and run.
+            """)
+            return
     
-    test_url = st.text_input(
-        "Salesforce Profile URL:",
-        value="https://www.salesforce.com/trailblazer/aarathisreeballa",
-        placeholder="https://www.salesforce.com/trailblazer/username"
+    with col2:
+        # Check Scrapy installation
+        try:
+            import scrapy
+            import scrapy_splash
+            st.success("✅ Scrapy and Scrapy-Splash installed")
+        except ImportError:
+            st.error("❌ Missing dependencies")
+            st.info("""
+            **Install dependencies:**
+            ```
+            pip install scrapy scrapy-splash pandas
+            ```
+            """)
+            return
+    
+    # File upload
+    st.subheader("📂 Upload Profile Data")
+    
+    uploaded_file = st.file_uploader(
+        "Choose CSV file",
+        type="csv",
+        help="CSV should contain: Roll Number, Name, Salesforce URL"
     )
     
-    if st.button("🔍 Extract Badge Image"):
-        if test_url:
-            driver = setup_driver()
-            if driver:
-                try:
-                    with st.spinner("Extracting agentblazer badge..."):
-                        result = extract_agentblazer_badge(test_url, driver)
-                        
-                        if result['status'] == 'Success':
-                            st.success(f"🎉 **Badge Found: {result['badge_level']}**")
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.subheader("📋 Badge Details")
-                                st.write(f"**Badge Level:** {result['badge_level']}")
-                                st.write(f"**Detection Method:** {result['detection_method']}")
-                                st.write(f"**Image URL:** `{result['badge_image_url']}`")
-                                st.write(f"**Alt Text:** `{result['alt_text']}`")
-                            
-                            with col2:
-                                st.subheader("📷 Badge Image")
-                                if result['badge_image_url']:
-                                    try:
-                                        st.image(result['badge_image_url'], caption=f"Agentblazer {result['badge_level']} Badge", width=300)
-                                    except Exception as e:
-                                        st.error(f"Could not load image: {e}")
-                        
-                        elif result['badge_level'] == 'None':
-                            st.warning("❌ No agentblazer badge found on this profile")
-                            st.info("The profile might not have an agentblazer badge or it may not be publicly visible")
-                        
-                        else:
-                            st.error(f"❌ {result['status']}")
-                        
-                finally:
-                    driver.quit()
-    
-    # Batch processing
-    st.divider()
-    st.subheader("📂 Batch Processing")
-    
-    uploaded_file = st.file_uploader("Upload CSV with Salesforce URLs", type="csv")
-    
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        
-        required_cols = ['Roll Number', 'Name', 'Salesforce URL']
-        if all(col in df.columns for col in required_cols):
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
             
-            st.success(f"✅ Loaded {len(df)} profiles")
-            st.dataframe(df.head())
+            required_cols = ['Roll Number', 'Name', 'Salesforce URL']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if len(missing_cols) > 0:
+                st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+                return
+            
+            st.success(f"✅ Loaded {len(df)} profiles successfully!")
+            
+            # Preview data
+            with st.expander("📋 Data Preview", expanded=True):
+                st.dataframe(df.head())
             
             # Configuration
-            col1, col2 = st.columns(2)
-            with col1:
-                delay = st.slider("Delay between requests (seconds)", 3, 15, 8)
-            with col2:
-                max_profiles = st.number_input("Max profiles to process", 1, len(df), min(5, len(df)))
+            st.subheader("⚙️ Scraping Configuration")
             
-            if st.button("🚀 Extract All Badge Images"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                delay = st.slider("Request delay (seconds)", 1, 10, 3)
+            
+            with col2:
+                concurrent = st.slider("Concurrent requests", 1, 5, 2)
+            
+            with col3:
+                max_profiles = st.number_input(
+                    "Max profiles (0 = all)", 
+                    0, len(df), 
+                    min(10, len(df))
+                )
+            
+            # Start scraping
+            if st.button("🚀 Start Scrapy Badge Detection", type="primary"):
                 
-                profiles_to_process = df.head(max_profiles)
+                # Limit profiles if specified
+                profiles_to_process = df.head(max_profiles) if max_profiles > 0 else df
                 
-                driver = setup_driver()
-                if driver:
-                    try:
-                        results = []
+                # Save CSV to temporary file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
+                    profiles_to_process.to_csv(tmp_file.name, index=False)
+                    tmp_csv_path = tmp_file.name
+                
+                st.info(f"🕷️ Starting Scrapy to process {len(profiles_to_process)} profiles...")
+                
+                # Initialize Scrapy runner
+                scrapy_runner = ScrapyRunner()
+                
+                # Progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                with st.spinner("Scrapy is crawling profiles with JavaScript support..."):
+                    
+                    status_text.text("🕷️ Initializing Scrapy spider...")
+                    
+                    # Run the spider
+                    success, stdout, stderr = scrapy_runner.run_spider(tmp_csv_path)
+                    
+                    if success:
+                        st.success("🎉 Scrapy crawling completed successfully!")
                         
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
+                        # Get results
+                        results_df = scrapy_runner.get_results()
                         
-                        for i, (_, row) in enumerate(profiles_to_process.iterrows()):
-                            progress = (i + 1) / len(profiles_to_process)
-                            progress_bar.progress(progress)
-                            status_text.text(f"Processing {i+1}/{len(profiles_to_process)}: {row['Name']}")
+                        if not results_df.empty:
                             
-                            result = extract_agentblazer_badge(row['Salesforce URL'], driver)
+                            # Summary statistics
+                            col1, col2, col3, col4 = st.columns(4)
                             
-                            results.append({
-                                'Roll Number': row['Roll Number'],
-                                'Name': row['Name'],
-                                'Salesforce URL': row['Salesforce URL'],
-                                'Badge Level': result['badge_level'],
-                                'Badge Image URL': result['badge_image_url'],
-                                'Alt Text': result['alt_text'],
-                                'Detection Method': result['detection_method'],
-                                'Status': result['status']
-                            })
+                            with col1:
+                                st.metric("Total Processed", len(results_df))
                             
-                            # Delay between requests
-                            if i < len(profiles_to_process) - 1:
-                                time.sleep(delay)
-                        
-                        # Display results
-                        results_df = pd.DataFrame(results)
-                        
-                        st.success("🎉 Batch processing completed!")
-                        
-                        # Summary
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Total", len(results_df))
-                        with col2:
-                            badges_found = len(results_df[results_df['Badge Level'].isin(['Champion', 'Innovator', 'Legend'])])
-                            st.metric("Badges Found", badges_found)
-                        with col3:
-                            innovators = len(results_df[results_df['Badge Level'] == 'Innovator'])
-                            st.metric("Innovators", innovators)
-                        with col4:
-                            champions = len(results_df[results_df['Badge Level'] == 'Champion'])
-                            st.metric("Champions", champions)
-                        
-                        # Results table
-                        st.dataframe(results_df)
-                        
-                        # Download
-                        csv_data = results_df.to_csv(index=False)
-                        st.download_button(
-                            "📥 Download Results",
-                            csv_data,
-                            f"agentblazer_badges_{int(time.time())}.csv",
-                            "text/csv"
-                        )
-                        
-                    finally:
-                        driver.quit()
-        else:
-            st.error("❌ CSV must have columns: Roll Number, Name, Salesforce URL")
+                            with col2:
+                                badges_found = len(results_df[results_df['badge_level'].isin(['Champion', 'Innovator', 'Legend'])])
+                                st.metric("Badges Found", badges_found)
+                            
+                            with col3:
+                                innovators = len(results_df[results_df['badge_level'] == 'Innovator'])
+                                st.metric("Innovators", innovators)
+                            
+                            with col4:
+                                champions = len(results_df[results_df['badge_level'] == 'Champion'])
+                                st.metric("Champions", champions)
+                            
+                            # Additional metrics
+                            col5, col6 = st.columns(2)
+                            with col5:
+                                legends = len(results_df[results_df['badge_level'] == 'Legend'])
+                                st.metric("Legends", legends)
+                            with col6:
+                                none_found = len(results_df[results_df['badge_level'] == 'None'])
+                                st.metric("No Badge", none_found)
+                            
+                            # Results table
+                            st.subheader("📊 Detailed Results")
+                            st.dataframe(results_df, use_container_width=True)
+                            
+                            # Badge distribution chart
+                            if not results_df.empty:
+                                badge_counts = results_df['badge_level'].value_counts()
+                                st.subheader("📈 Badge Distribution")
+                                st.bar_chart(badge_counts)
+                            
+                            # Download results
+                            csv_data = results_df.to_csv(index=False)
+                            
+                            st.download_button(
+                                label="📥 Download Results CSV",
+                                data=csv_data,
+                                file_name=f"scrapy_badge_results_{int(time.time())}.csv",
+                                mime="text/csv",
+                                type="primary"
+                            )
+                            
+                        else:
+                            st.warning("⚠️ No results generated. Check the logs.")
+                    
+                    else:
+                        st.error("❌ Scrapy crawling failed")
+                        if stderr:
+                            st.error(f"Error: {stderr}")
+                        if stdout:
+                            st.text(f"Output: {stdout}")
+                
+                # Cleanup
+                try:
+                    os.unlink(tmp_csv_path)
+                except:
+                    pass
+        
+        except Exception as e:
+            st.error(f"❌ Error processing CSV: {str(e)}")
+    
+    # Instructions
+    st.divider()
+    
+    st.subheader("📚 Setup Instructions")
+    
+    with st.expander("Complete Setup Guide"):
+        st.markdown("""
+        ### 🐳 **1. Start Splash Server**
+        ```
+        # Using Docker (recommended)
+        docker run -p 8050:8050 scrapinghub/splash
+        
+        # Or install locally
+        pip install scrapy-splash
+        ```
+        
+        ### 📦 **2. Install Dependencies**
+        ```
+        pip install scrapy scrapy-splash pandas streamlit
+        ```
+        
+        ### 📋 **3. Prepare CSV File**
+        Your CSV must have these exact columns:
+        - `Roll Number`
+        - `Name` 
+        - `Salesforce URL` (format: https://www.salesforce.com/trailblazer/username)
+        
+        ### 🚀 **4. Run Application**
+        ```
+        streamlit run streamlit_scrapy_app.py
+        ```
+        
+        ### 🎯 **How It Works**
+        1. **Scrapy + Splash**: Handles JavaScript-rendered content
+        2. **Dynamic Detection**: Waits for badges to load via JS
+        3. **Pattern Matching**: Finds exact agentblazer banner images
+        4. **Batch Processing**: Processes multiple profiles efficiently
+        5. **CSV Export**: Downloads results for further analysis
+        """)
 
 if __name__ == "__main__":
     main()
