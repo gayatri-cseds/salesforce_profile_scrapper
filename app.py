@@ -1,71 +1,55 @@
 import streamlit as st
-import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-from PIL import Image
-from io import BytesIO
 import time
+import os
 
-class FixedSalesforceSessionManager:
+class WorkingSalesforceLogin:
     def __init__(self):
         self.driver = None
         self.setup_driver()
     
     def setup_driver(self):
-        """Setup Chrome driver with automatic driver management"""
+        """Setup Chrome with persistent user profile for session management"""
         options = Options()
         
-        # Use persistent user data directory
-        options.add_argument("--user-data-dir=./chrome_profile")
+        # CRITICAL: Use persistent user profile to save session
+        profile_path = os.path.abspath("chrome_user_profile")
+        options.add_argument(f"--user-data-dir={profile_path}")
         
-        # Don't use headless to avoid detection
-        # options.add_argument("--headless")
+        # DON'T use headless mode - it gets detected
+        # options.add_argument("--headless")  # COMMENTED OUT
         
         options.add_argument("--window-size=1920,1080")
+        options.add_argument("--start-maximized")
+        
+        # Reduce automation detection
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
         
-        try:
-            # Use WebDriverManager for automatic driver management
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=options)
-            
-            # Remove webdriver property
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
-            st.success("✅ ChromeDriver setup successful!")
-            
-        except Exception as e:
-            st.error(f"❌ ChromeDriver setup failed: {str(e)}")
-            st.info("💡 Try installing webdriver-manager: pip install webdriver-manager")
-            raise
+        # Use webdriver-manager for compatibility
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=options)
+        
+        # Remove webdriver property
+        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     
-    def test_connection(self):
-        """Test if driver works correctly"""
+    def manual_login_with_mfa(self, username, password):
+        """Interactive login that handles MFA manually"""
         try:
-            self.driver.get("https://www.google.com")
-            st.success("✅ Browser connection test successful!")
-            return True
-        except Exception as e:
-            st.error(f"❌ Browser test failed: {str(e)}")
-            return False
-    
-    def login_salesforce(self, username, password):
-        """Login to Salesforce with improved error handling"""
-        try:
+            # Navigate to Salesforce login
             self.driver.get("https://login.salesforce.com")
             time.sleep(3)
             
             # Check if already logged in
-            if "lightning" in self.driver.current_url or "setup" in self.driver.current_url:
-                st.success("✅ Already logged in to Salesforce!")
+            if self.check_already_logged_in():
                 return True
             
-            # Perform login
+            # Fill credentials
             username_field = self.driver.find_element(By.ID, "username")
             username_field.clear()
             username_field.send_keys(username)
@@ -74,104 +58,166 @@ class FixedSalesforceSessionManager:
             password_field.clear()
             password_field.send_keys(password)
             
+            # Click login
             login_button = self.driver.find_element(By.ID, "Login")
             login_button.click()
             
-            # Wait for login
-            time.sleep(15)
+            # Wait and provide instructions for manual MFA
+            st.info("🔐 **Complete MFA/2FA manually in the browser window that opened**")
+            st.info("⏳ **After completing MFA, click 'Check Login Status' below**")
             
-            # Check if login successful
-            if "lightning" in self.driver.current_url or "setup" in self.driver.current_url:
-                st.success("✅ Successfully logged in to Salesforce!")
-                return True
-            else:
-                st.warning("⚠️ Login may require 2FA - complete manually and try again")
-                return False
-                
+            return "MFA_REQUIRED"
+            
         except Exception as e:
-            st.error(f"Login error: {str(e)}")
+            st.error(f"Login failed: {str(e)}")
+            return False
+    
+    def check_already_logged_in(self):
+        """Check if already logged in to Salesforce"""
+        current_url = self.driver.current_url
+        return any(keyword in current_url for keyword in ["lightning", "setup", "one.app", "salesforce.com/"])
+    
+    def check_login_success(self):
+        """Check if login was successful after MFA"""
+        time.sleep(5)  # Wait for page to load
+        
+        if self.check_already_logged_in():
+            st.success("✅ **Successfully logged in to Salesforce!**")
+            st.success("🎉 **Session saved - future runs won't require MFA**")
+            return True
+        else:
+            st.warning("⚠️ **Still on login page - please complete MFA and try again**")
+            return False
+    
+    def navigate_to_profile(self, profile_url):
+        """Navigate to a profile page using authenticated session"""
+        try:
+            if not self.check_already_logged_in():
+                st.error("❌ Not logged in - please login first")
+                return False
+            
+            self.driver.get(profile_url)
+            time.sleep(10)  # Wait for page load
+            
+            return True
+            
+        except Exception as e:
+            st.error(f"Navigation failed: {str(e)}")
             return False
     
     def cleanup(self):
-        """Clean up driver"""
+        """Cleanup driver"""
         if self.driver:
             self.driver.quit()
 
 def main():
     st.set_page_config(
-        page_title="Fixed Badge Detector",
-        page_icon="🔧",
+        page_title="Working Salesforce Login",
+        page_icon="🔐",
         layout="wide"
     )
     
-    st.title("🔧 Fixed Salesforce Badge Detector")
-    st.success("✅ ChromeDriver version mismatch resolved!")
+    st.title("🔐 Working Salesforce Login Solution")
     
-    # Setup requirements
-    with st.expander("📋 Setup Requirements", expanded=True):
+    # Important instructions
+    with st.expander("📋 How This Works", expanded=True):
         st.markdown("""
-        **To fix the ChromeDriver error, install:**
+        **This solution handles Salesforce's security requirements:**
         
-        ```
-        pip install webdriver-manager selenium streamlit pillow pandas
-        ```
+        1. **Manual MFA Completion** - You complete 2FA manually once
+        2. **Session Persistence** - Browser saves your login session
+        3. **No Re-authentication** - Future runs use saved session
+        4. **Visible Browser** - Reduces automation detection
         
-        **This will automatically:**
-        - ✅ Download the correct ChromeDriver version
-        - ✅ Match your installed Chrome browser
-        - ✅ Handle driver management automatically
+        **Steps:**
+        1. Enter credentials and click "Login with Manual MFA"
+        2. Complete MFA in the browser window that opens
+        3. Click "Check Login Status" after completing MFA
+        4. Use "Test Profile Navigation" to verify it works
         """)
     
-    # Test connection first
-    if st.button("🧪 Test ChromeDriver Setup"):
-        try:
-            with st.spinner("Testing ChromeDriver setup..."):
-                session_manager = FixedSalesforceSessionManager()
-                
-                if session_manager.test_connection():
-                    st.session_state.session_manager = session_manager
-                    st.balloons()
-                else:
-                    session_manager.cleanup()
-                    
-        except Exception as e:
-            st.error(f"Setup failed: {str(e)}")
-            
-            st.subheader("🔧 Troubleshooting Steps")
-            st.write("1. **Check Chrome version:** Go to `chrome://version/`")
-            st.write("2. **Install webdriver-manager:** `pip install webdriver-manager`")
-            st.write("3. **Update Chrome browser** to latest version")
-            st.write("4. **Restart your application** after installing dependencies")
+    # Initialize session manager
+    if 'login_manager' not in st.session_state:
+        st.session_state.login_manager = None
     
-    # Login section (only show if driver works)
-    if 'session_manager' in st.session_state:
+    # Login Section
+    st.subheader("🔑 Salesforce Authentication")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        username = st.text_input(
+            "Salesforce Username:",
+            help="Your Salesforce login email"
+        )
+        password = st.text_input(
+            "Salesforce Password:",
+            type="password"
+        )
+    
+    with col2:
+        if st.button("🔐 Login with Manual MFA", type="primary"):
+            if username and password:
+                try:
+                    with st.spinner("Setting up browser session..."):
+                        login_manager = WorkingSalesforceLogin()
+                        st.session_state.login_manager = login_manager
+                    
+                    with st.spinner("Navigating to login page..."):
+                        result = login_manager.manual_login_with_mfa(username, password)
+                    
+                    if result == "MFA_REQUIRED":
+                        st.info("👆 **Browser window opened - complete MFA there**")
+                    elif result:
+                        st.success("✅ Login successful!")
+                    
+                except Exception as e:
+                    st.error(f"Setup failed: {str(e)}")
+            else:
+                st.error("Please enter username and password")
+        
+        # Check login status after MFA
+        if st.session_state.login_manager and st.button("✅ Check Login Status"):
+            if st.session_state.login_manager.check_login_success():
+                st.balloons()
+    
+    # Test navigation
+    if st.session_state.login_manager:
         st.divider()
-        st.subheader("🔑 Salesforce Login")
+        st.subheader("🧪 Test Profile Navigation")
+        
+        test_url = st.text_input(
+            "Test Profile URL:",
+            value="https://trailhead.salesforce.com/profile/aarathisreeballa",
+            help="Enter a Salesforce profile URL to test navigation"
+        )
+        
+        if st.button("🌐 Navigate to Profile"):
+            if test_url:
+                with st.spinner("Navigating to profile..."):
+                    success = st.session_state.login_manager.navigate_to_profile(test_url)
+                
+                if success:
+                    st.success("✅ **Navigation successful!**")
+                    st.info("📸 You can now take screenshots or extract data")
+                else:
+                    st.error("❌ Navigation failed")
+    
+    # Cleanup section
+    if st.session_state.login_manager:
+        st.divider()
         
         col1, col2 = st.columns(2)
         
         with col1:
-            username = st.text_input("Username:")
-            password = st.text_input("Password:", type="password")
+            if st.button("🔄 Reset Session"):
+                st.session_state.login_manager.cleanup()
+                st.session_state.login_manager = None
+                st.success("✅ Session reset - you can login again")
+                st.rerun()
         
         with col2:
-            if st.button("🔐 Login to Salesforce"):
-                if username and password:
-                    with st.spinner("Logging in..."):
-                        success = st.session_state.session_manager.login_salesforce(username, password)
-                        
-                        if success:
-                            st.success("Ready for badge detection!")
-                        else:
-                            st.error("Login failed - check credentials or complete 2FA")
-    
-    # Cleanup button
-    if 'session_manager' in st.session_state:
-        if st.button("🔄 Cleanup Browser Session"):
-            st.session_state.session_manager.cleanup()
-            del st.session_state.session_manager
-            st.success("✅ Browser session cleaned up")
-            st.rerun()
+            st.info("**Session Status:** Active and ready for profile navigation")
 
 if __name__ == "__main__":
     main()
