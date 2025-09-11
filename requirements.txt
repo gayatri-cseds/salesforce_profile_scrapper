@@ -11,3 +11,4 @@ opencv-python
 numpy
 scrapy
 twisted
+scrapy-splash
