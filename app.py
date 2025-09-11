@@ -4,51 +4,91 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import io
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import json
 
-def extract_badge_level(url):
+def setup_driver():
+    """Setup Chrome driver with appropriate options"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    
+    try:
+        driver = webdriver.Chrome(options=chrome_options)
+        return driver
+    except Exception as e:
+        st.error(f"Failed to setup Chrome driver: {e}")
+        return None
+
+def extract_badge_level_selenium(url, driver):
     """
-    Extract badge level from Salesforce trailblazer profile URL
-    Returns: Champion (level1), Innovator (level2), Legend (level3), or None
+    Enhanced badge extraction using Selenium for dynamic content
     """
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        driver.get(url)
         
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
+        # Wait for page to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # Additional wait for dynamic content
+        time.sleep(3)
         
-        # Look for badge level images based on your inspection pattern
+        # Get page source after JavaScript execution
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        
+        # Enhanced badge detection patterns
         badge_patterns = [
-            # Agentblazer badges (Champion, Innovator, Legend)
-            (r'banner-level-1\.png', 'Champion'),
-            (r'banner-level-2\.png', 'Innovator'), 
-            (r'banner-level-3\.png', 'Legend'),
-            # Alternative patterns for different badge types
+            # Agentblazer specific patterns
+            (r'agentblazer.*banner-level-1', 'Champion'),
+            (r'agentblazer.*banner-level-2', 'Innovator'),
+            (r'agentblazer.*banner-level-3', 'Legend'),
+            # General badge patterns
             (r'champion', 'Champion'),
             (r'innovator', 'Innovator'),
-            (r'legend', 'Legend')
+            (r'legend', 'Legend'),
+            # Rank-based patterns
+            (r'rank.*1', 'Champion'),
+            (r'rank.*2', 'Innovator'),
+            (r'rank.*3', 'Legend')
         ]
         
-        # Search in img src attributes
+        # Check all images
         for img in soup.find_all('img'):
-            src = img.get('src', '').lower()
-            alt = img.get('alt', '').lower()
+            src = str(img.get('src', '')).lower()
+            alt = str(img.get('alt', '')).lower()
+            classes = ' '.join(img.get('class', [])).lower()
             
             for pattern, level in badge_patterns:
-                if re.search(pattern, src) or re.search(pattern, alt):
+                if re.search(pattern, src) or re.search(pattern, alt) or re.search(pattern, classes):
                     return level
         
-        # Search in CSS classes and other attributes
-        for element in soup.find_all():
-            class_attr = ' '.join(element.get('class', [])).lower()
+        # Check div elements with classes
+        for div in soup.find_all('div'):
+            classes = ' '.join(div.get('class', [])).lower()
+            text = div.get_text().lower()
+            
             for pattern, level in badge_patterns:
-                if re.search(pattern, class_attr):
+                if re.search(pattern, classes) or re.search(pattern, text):
                     return level
+        
+        # Check for rank information in JSON-like structures
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string:
+                content = script.string.lower()
+                for pattern, level in badge_patterns:
+                    if re.search(pattern, content):
+                        return level
         
         return "None"
         
@@ -56,167 +96,25 @@ def extract_badge_level(url):
         st.error(f"Error processing {url}: {str(e)}")
         return "Error"
 
-def process_single_row(row):
-    """Process a single row of data"""
-    roll_number, name, url = row['Roll Number'], row['Name'], row['Salesforce URL']
-    badge_level = extract_badge_level(url)
-    
-    # Map to level numbers
-    level_mapping = {
-        'Champion': 'Level 1',
-        'Innovator': 'Level 2', 
-        'Legend': 'Level 3',
-        'None': 'None',
-        'Error': 'Error'
-    }
-    
-    return {
-        'Roll Number': roll_number,
-        'Name': name,
-        'Salesforce URL': url,
-        'Badge Status': badge_level,
-        'Level': level_mapping.get(badge_level, 'Unknown')
-    }
-
-def main():
-    st.set_page_config(
-        page_title="Salesforce Badge Extractor",
-        page_icon="🏆",
-        layout="wide"
-    )
-    
-    st.title("🏆 Salesforce Trailblazer Badge Extractor")
-    st.markdown("Upload a CSV file with Roll Number, Name, and Salesforce public URLs to extract badge levels.")
-    
-    # Sidebar with information
-    with st.sidebar:
-        st.header("Badge Levels")
-        st.markdown("""
-        **Agentblazer Badges:**
-        - 🥉 **Champion** → Level 1
-        - 🥈 **Innovator** → Level 2  
-        - 🥇 **Legend** → Level 3
-        - ❌ **None** → No badge found
+def check_profile_accessibility(url, driver):
+    """
+    Check if profile is accessible and public
+    """
+    try:
+        driver.get(url)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
         
-        **Expected CSV Format:**
-        - Roll Number
-        - Name  
-        - Salesforce URL
-        """)
+        page_text = driver.page_source.lower()
         
-        st.header("Sample URL Format")
-        st.code("https://www.salesforce.com/trailblazer/username")
-    
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Choose a CSV file", 
-        type="csv",
-        help="Upload a CSV file with columns: Roll Number, Name, Salesforce URL"
-    )
-    
-    if uploaded_file is not None:
-        try:
-            # Read CSV
-            df = pd.read_csv(uploaded_file)
+        # Check for privacy indicators
+        if "profile is private" in page_text or "not found" in page_text:
+            return "Private/Not Found"
+        elif "badges" in page_text or "trailhead" in page_text:
+            return "Public"
+        else:
+            return "Unknown"
             
-            # Validate required columns
-            required_columns = ['Roll Number', 'Name', 'Salesforce URL']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            
-            if missing_columns:
-                st.error(f"Missing required columns: {', '.join(missing_columns)}")
-                st.info("Please ensure your CSV has columns: Roll Number, Name, Salesforce URL")
-                return
-            
-            st.success(f"✅ CSV loaded successfully! Found {len(df)} records.")
-            
-            # Display preview
-            with st.expander("📋 Data Preview", expanded=True):
-                st.dataframe(df.head())
-            
-            # Processing options
-            col1, col2 = st.columns(2)
-            with col1:
-                max_workers = st.slider("Concurrent requests", 1, 10, 3, 
-                                      help="Number of simultaneous requests (higher = faster but may cause rate limiting)")
-            with col2:
-                delay = st.slider("Delay between requests (seconds)", 0.0, 5.0, 1.0, 0.5,
-                                help="Delay to avoid overwhelming the server")
-            
-            # Process button
-            if st.button("🚀 Extract Badge Levels", type="primary"):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                results_container = st.empty()
-                
-                results = []
-                total_rows = len(df)
-                
-                # Process with threading for better performance
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all tasks
-                    future_to_row = {
-                        executor.submit(process_single_row, row): idx 
-                        for idx, (_, row) in enumerate(df.iterrows())
-                    }
-                    
-                    # Collect results as they complete
-                    for completed, future in enumerate(as_completed(future_to_row)):
-                        try:
-                            result = future.result()
-                            results.append(result)
-                            
-                            # Update progress
-                            progress = (completed + 1) / total_rows
-                            progress_bar.progress(progress)
-                            status_text.text(f"Processed {completed + 1}/{total_rows} records...")
-                            
-                            # Add delay to avoid rate limiting
-                            if delay > 0:
-                                time.sleep(delay)
-                                
-                        except Exception as e:
-                            st.error(f"Error processing record: {str(e)}")
-                
-                # Create results DataFrame
-                results_df = pd.DataFrame(results)
-                
-                # Display results
-                st.success("🎉 Processing completed!")
-                
-                # Summary statistics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Records", len(results_df))
-                with col2:
-                    champions = len(results_df[results_df['Badge Status'] == 'Champion'])
-                    st.metric("Champions", champions)
-                with col3:
-                    innovators = len(results_df[results_df['Badge Status'] == 'Innovator'])
-                    st.metric("Innovators", innovators)
-                with col4:
-                    legends = len(results_df[results_df['Badge Status'] == 'Legend'])
-                    st.metric("Legends", legends)
-                
-                # Results table
-                st.subheader("📊 Results")
-                st.dataframe(results_df, use_container_width=True)
-                
-                # Download button
-                csv_buffer = io.StringIO()
-                results_df.to_csv(csv_buffer, index=False)
-                csv_data = csv_buffer.getvalue()
-                
-                st.download_button(
-                    label="📥 Download Results as CSV",
-                    data=csv_data,
-                    file_name=f"salesforce_badges_results_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-                
-        except Exception as e:
-            st.error(f"Error reading CSV file: {str(e)}")
-            st.info("Please check that your CSV file is properly formatted.")
-
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        return "Error"
