@@ -5,163 +5,268 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import time
-import json
 
 def setup_driver():
-    """Setup Chrome driver for Shadow DOM scraping"""
+    """Setup Chrome driver optimized for Shadow DOM"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=VizDisplayCompositor")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
     return webdriver.Chrome(options=options)
 
-def extract_badge_from_shadow_dom(driver, profile_url):
-    """Extract badge from Shadow DOM structure you found"""
+def debug_page_structure(driver):
+    """Debug: Show all shadow hosts on the page"""
+    shadow_hosts = driver.execute_script("""
+        function findAllShadowHosts(element) {
+            let shadowHosts = [];
+            
+            function traverse(el) {
+                if (el.shadowRoot) {
+                    shadowHosts.push({
+                        tagName: el.tagName,
+                        className: el.className,
+                        id: el.id
+                    });
+                    
+                    // Recursively check inside shadow root
+                    const shadowElements = el.shadowRoot.querySelectorAll('*');
+                    shadowElements.forEach(traverse);
+                }
+                
+                // Check children
+                if (el.children) {
+                    Array.from(el.children).forEach(traverse);
+                }
+            }
+            
+            traverse(element);
+            return shadowHosts;
+        }
+        
+        return findAllShadowHosts(document.body);
+    """)
+    
+    return shadow_hosts
+
+def extract_badge_advanced_shadow_dom(driver, profile_url):
+    """Advanced Shadow DOM extraction with proper nested traversal"""
     try:
+        st.info(f"🔍 Loading: {profile_url}")
         driver.get(profile_url)
         
-        # Wait for page to load
-        WebDriverWait(driver, 20).until(
+        # Wait for initial load
+        WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
-        # Additional wait for dynamic content
-        time.sleep(10)
+        # Additional wait for Shadow DOM content
+        time.sleep(15)
         
-        # Method 1: Find the exact shadow host you discovered
-        shadow_host_selectors = [
-            "lwc-tbui-learner-status-level",
-            "[class*='learner-status-level']",
-            "[class*='tbui-learner']"
-        ]
+        st.info("🔍 Debugging page structure...")
+        shadow_hosts = debug_page_structure(driver)
+        st.write(f"Found {len(shadow_hosts)} shadow hosts: {shadow_hosts}")
         
-        for selector in shadow_host_selectors:
-            try:
-                # Find shadow host
-                shadow_host = driver.find_element(By.CSS_SELECTOR, selector)
-                
-                # Get shadow root using JavaScript
-                shadow_root = driver.execute_script("return arguments[0].shadowRoot", shadow_host)
-                
-                if shadow_root:
-                    # Look for the container div inside shadow root
-                    container = driver.execute_script(
-                        "return arguments[0].querySelector('.container')", 
-                        shadow_root
-                    )
-                    
-                    if container:
-                        # Find the badge image
-                        badge_img = driver.execute_script(
-                            "return arguments[0].querySelector('img')", 
-                            container
-                        )
-                        
-                        if badge_img:
-                            # Extract badge information
-                            src = driver.execute_script("return arguments[0].src", badge_img)
-                            alt_text = driver.execute_script("return arguments[0].alt", badge_img)
-                            
-                            # Determine badge level from your exact pattern
-                            if "banner-level-3.png" in src:
-                                badge_level = "Legend"
-                            elif "banner-level-2.png" in src:
-                                badge_level = "Innovator"  # This matches your screenshot!
-                            elif "banner-level-1.png" in src:
-                                badge_level = "Champion"
-                            else:
-                                # Fallback to alt text analysis
-                                alt_lower = alt_text.lower() if alt_text else ""
-                                if "legend" in alt_lower:
-                                    badge_level = "Legend"
-                                elif "innovator" in alt_lower:
-                                    badge_level = "Innovator"
-                                elif "champion" in alt_lower:
-                                    badge_level = "Champion"
-                                else:
-                                    badge_level = "Unknown"
-                            
-                            return {
-                                'badge_level': badge_level,
-                                'badge_src': src,
-                                'alt_text': alt_text,
-                                'detection_method': f'Shadow DOM - {selector}',
-                                'status': 'Success'
-                            }
+        # Method 1: Modern Selenium 4+ Shadow Root approach
+        try:
+            st.info("🔍 Trying modern shadow root approach...")
             
-            except Exception as e:
-                continue  # Try next selector
+            # Look for common shadow host patterns
+            shadow_host_patterns = [
+                "lwc-tbui-learner-status-level",
+                "[class*='learner-status']",
+                "[class*='tbui']",
+                "[class*='badge']",
+                "c-tbui-learner-status-level",
+                "force-record-layout-item"
+            ]
+            
+            for pattern in shadow_host_patterns:
+                try:
+                    shadow_hosts_elements = driver.find_elements(By.CSS_SELECTOR, pattern)
+                    st.write(f"Found {len(shadow_hosts_elements)} elements with pattern: {pattern}")
+                    
+                    for shadow_host in shadow_hosts_elements:
+                        try:
+                            # Use modern shadow root property (Selenium 4+)
+                            shadow_root = shadow_host.shadow_root
+                            
+                            if shadow_root:
+                                st.success(f"✅ Accessed shadow root with pattern: {pattern}")
+                                
+                                # Look for nested shadow hosts or direct images
+                                possible_selectors = [
+                                    "img[src*='agentblazer']",
+                                    "img[alt*='agentblazer']",
+                                    "img[src*='banner-level']",
+                                    ".container img",
+                                    "div img",
+                                    "*[class*='badge'] img"
+                                ]
+                                
+                                for selector in possible_selectors:
+                                    try:
+                                        images = shadow_root.find_elements(By.CSS_SELECTOR, selector)
+                                        st.write(f"Found {len(images)} images with selector: {selector}")
+                                        
+                                        for img in images:
+                                            src = img.get_attribute('src')
+                                            alt = img.get_attribute('alt')
+                                            
+                                            st.write(f"Image found - src: {src}, alt: {alt}")
+                                            
+                                            if src and ('agentblazer' in src.lower() or 'banner-level' in src.lower()):
+                                                # Extract badge level
+                                                if "banner-level-3.png" in src:
+                                                    badge_level = "Legend"
+                                                elif "banner-level-2.png" in src:
+                                                    badge_level = "Innovator"
+                                                elif "banner-level-1.png" in src:
+                                                    badge_level = "Champion"
+                                                else:
+                                                    badge_level = "Unknown"
+                                                
+                                                return {
+                                                    'badge_level': badge_level,
+                                                    'badge_src': src,
+                                                    'alt_text': alt,
+                                                    'detection_method': f'Modern Shadow Root - {pattern} -> {selector}',
+                                                    'status': 'Success'
+                                                }
+                                    except Exception as e:
+                                        continue
+                                
+                                # Check for nested shadow hosts
+                                nested_hosts = shadow_root.find_elements(By.CSS_SELECTOR, "*")
+                                st.write(f"Checking {len(nested_hosts)} nested elements...")
+                                
+                                for nested_element in nested_hosts:
+                                    try:
+                                        if hasattr(nested_element, 'shadow_root'):
+                                            nested_shadow = nested_element.shadow_root
+                                            if nested_shadow:
+                                                nested_images = nested_shadow.find_elements(By.CSS_SELECTOR, "img")
+                                                for img in nested_images:
+                                                    src = img.get_attribute('src')
+                                                    alt = img.get_attribute('alt')
+                                                    
+                                                    if src and 'agentblazer' in src.lower():
+                                                        st.success(f"Found nested badge: {src}")
+                                                        return {
+                                                            'badge_level': 'Detected',
+                                                            'badge_src': src,
+                                                            'alt_text': alt,
+                                                            'detection_method': 'Nested Shadow Root',
+                                                            'status': 'Success'
+                                                        }
+                                    except:
+                                        continue
+                        
+                        except Exception as e:
+                            st.write(f"Error accessing shadow root: {str(e)}")
+                            continue
+                            
+                except NoSuchElementException:
+                    continue
         
-        # Method 2: Generic shadow DOM traversal
-        shadow_elements = driver.execute_script("""
-            function findShadowRoots(element) {
-                let shadowRoots = [];
+        except Exception as e:
+            st.error(f"Modern approach failed: {str(e)}")
+        
+        # Method 2: JavaScript-based comprehensive search
+        st.info("🔍 Trying comprehensive JavaScript search...")
+        
+        badge_data = driver.execute_script("""
+            function findBadgesInAllShadowRoots(element) {
+                let badges = [];
                 
-                function traverse(el) {
-                    if (el.shadowRoot) {
-                        shadowRoots.push(el);
-                        // Look inside shadow root
-                        const shadowElements = el.shadowRoot.querySelectorAll('*');
-                        shadowElements.forEach(traverse);
+                function searchElement(el, path = '') {
+                    // Check current element for badges
+                    if (el.tagName === 'IMG') {
+                        const src = el.src || '';
+                        const alt = el.alt || '';
+                        
+                        if (src.includes('agentblazer') || alt.includes('agentblazer') || src.includes('banner-level')) {
+                            badges.push({
+                                src: src,
+                                alt: alt,
+                                path: path
+                            });
+                        }
                     }
                     
-                    // Also check children
-                    el.children && Array.from(el.children).forEach(traverse);
+                    // If element has shadow root, search inside
+                    if (el.shadowRoot) {
+                        const shadowElements = el.shadowRoot.querySelectorAll('*');
+                        shadowElements.forEach((shadowEl, index) => {
+                            searchElement(shadowEl, path + ` -> shadow[${index}]`);
+                        });
+                    }
+                    
+                    // Search children
+                    if (el.children) {
+                        Array.from(el.children).forEach((child, index) => {
+                            searchElement(child, path + ` -> child[${index}]`);
+                        });
+                    }
                 }
                 
-                traverse(element);
-                return shadowRoots;
+                searchElement(element, 'body');
+                return badges;
             }
             
-            const shadowHosts = findShadowRoots(document.body);
-            const results = [];
-            
-            shadowHosts.forEach(host => {
-                const images = host.shadowRoot.querySelectorAll('img[src*="agentblazer"], img[alt*="agentblazer"]');
-                images.forEach(img => {
-                    results.push({
-                        src: img.src,
-                        alt: img.alt,
-                        hostTag: host.tagName
-                    });
-                });
-            });
-            
-            return results;
+            return findBadgesInAllShadowRoots(document.body);
         """)
         
-        if shadow_elements:
-            for element in shadow_elements:
-                src = element.get('src', '')
-                alt_text = element.get('alt', '')
+        st.write(f"JavaScript search found: {badge_data}")
+        
+        if badge_data:
+            for badge in badge_data:
+                src = badge.get('src', '')
+                alt = badge.get('alt', '')
+                path = badge.get('path', '')
                 
-                # Determine badge level
-                if "banner-level-3.png" in src:
-                    badge_level = "Legend"
-                elif "banner-level-2.png" in src:
-                    badge_level = "Innovator"
-                elif "banner-level-1.png" in src:
-                    badge_level = "Champion"
-                else:
-                    badge_level = "Unknown"
-                
-                return {
-                    'badge_level': badge_level,
-                    'badge_src': src,
-                    'alt_text': alt_text,
-                    'detection_method': 'Generic Shadow DOM Search',
-                    'status': 'Success'
-                }
+                if src:
+                    # Determine badge level
+                    if "banner-level-3.png" in src:
+                        badge_level = "Legend"
+                    elif "banner-level-2.png" in src:
+                        badge_level = "Innovator"
+                    elif "banner-level-1.png" in src:
+                        badge_level = "Champion"
+                    else:
+                        badge_level = "Found"
+                    
+                    return {
+                        'badge_level': badge_level,
+                        'badge_src': src,
+                        'alt_text': alt,
+                        'detection_method': f'JavaScript Deep Search - {path}',
+                        'status': 'Success'
+                    }
+        
+        # Method 3: Check page source as final fallback
+        page_source = driver.page_source
+        if 'agentblazer' in page_source.lower():
+            st.info("Found 'agentblazer' in page source, but couldn't locate specific elements")
+            return {
+                'badge_level': 'Present in Source',
+                'badge_src': '',
+                'alt_text': '',
+                'detection_method': 'Page Source Analysis',
+                'status': 'Partial Success'
+            }
         
         return {
             'badge_level': 'None',
             'badge_src': '',
             'alt_text': '',
-            'detection_method': 'No Shadow DOM badges found',
+            'detection_method': 'All methods exhausted',
             'status': 'No Badge Found'
         }
         
@@ -170,32 +275,22 @@ def extract_badge_from_shadow_dom(driver, profile_url):
             'badge_level': 'Error',
             'badge_src': '',
             'alt_text': '',
-            'detection_method': 'Exception occurred',
+            'detection_method': 'Exception in processing',
             'status': f'Error: {str(e)}'
         }
 
 def main():
     st.set_page_config(
-        page_title="Shadow DOM Badge Extractor",
-        page_icon="👻",
+        page_title="Advanced Shadow DOM Extractor",
+        page_icon="🔍",
         layout="wide"
     )
     
-    st.title("👻 Shadow DOM Badge Extractor")
-    st.success("✅ Specifically designed for Salesforce Shadow DOM structure!")
+    st.title("🔍 Advanced Shadow DOM Badge Extractor")
+    st.success("✅ Multi-level Shadow DOM traversal with comprehensive debugging!")
     
-    # Show the discovered structure
-    with st.expander("🔍 Discovered Shadow DOM Structure"):
-        st.code("""
-        lwc-tbui-learner-status-level
-        └── #shadow-root (open)
-            └── div class="container"
-                └── img src="https://trailhead.salesforce.com/agentblazer/banner-level-2.png" 
-                    alt="Agentblazer Innovator"
-        """, language="html")
-    
-    # Single profile test
-    st.subheader("🧪 Test Shadow DOM Extraction")
+    # Debug mode toggle
+    debug_mode = st.checkbox("🐛 Enable Debug Mode", value=True)
     
     profile_url = st.text_input(
         "Salesforce Profile URL:",
@@ -203,13 +298,13 @@ def main():
         placeholder="https://www.salesforce.com/trailblazer/username"
     )
     
-    if st.button("👻 Extract from Shadow DOM", type="primary"):
+    if st.button("🔍 Advanced Shadow DOM Extraction", type="primary"):
         if profile_url:
             driver = setup_driver()
             
             try:
-                with st.spinner("Accessing Shadow DOM..."):
-                    result = extract_badge_from_shadow_dom(driver, profile_url)
+                with st.spinner("Performing advanced Shadow DOM analysis..."):
+                    result = extract_badge_advanced_shadow_dom(driver, profile_url)
                 
                 if result['status'] == 'Success':
                     st.success(f"🎉 **Badge Detected: {result['badge_level']}**")
@@ -221,101 +316,55 @@ def main():
                         st.write(f"**Level:** {result['badge_level']}")
                         st.write(f"**Alt Text:** {result['alt_text']}")
                         st.write(f"**Detection Method:** {result['detection_method']}")
+                        st.write(f"**Status:** {result['status']}")
                     
                     with col2:
                         st.subheader("📷 Badge Image")
                         if result['badge_src']:
-                            st.image(result['badge_src'], caption=f"Agentblazer {result['badge_level']}", width=300)
-                            st.write(f"**Image URL:** `{result['badge_src']}`")
+                            st.image(result['badge_src'], caption=f"Badge: {result['badge_level']}", width=300)
+                            st.code(result['badge_src'])
                 
                 else:
-                    st.warning(f"❌ {result['status']}")
-                    st.write(f"**Method:** {result['detection_method']}")
+                    st.warning(f"⚠️ {result['status']}")
+                    st.write(f"**Detection Method:** {result['detection_method']}")
+                    
+                    if debug_mode:
+                        st.subheader("🐛 Debug Information")
+                        st.write("**Troubleshooting Steps:**")
+                        st.write("1. Check if the profile is public")
+                        st.write("2. Verify the profile has Agentblazer badges")
+                        st.write("3. Try accessing the profile manually to confirm badge visibility")
+                        st.write("4. The profile might be using a different Shadow DOM structure")
                 
             finally:
                 driver.quit()
     
-    # Batch processing
-    st.divider()
-    st.subheader("📂 Batch Shadow DOM Processing")
-    
-    uploaded_file = st.file_uploader("Upload CSV with profiles", type="csv")
-    
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
+    # Instructions
+    with st.expander("🔧 Troubleshooting Guide"):
+        st.markdown("""
+        ### **Common Issues & Solutions:**
         
-        required_cols = ['Roll Number', 'Name', 'Salesforce URL']
-        if all(col in df.columns for col in required_cols):
-            
-            st.success(f"✅ Loaded {len(df)} profiles")
-            st.dataframe(df.head())
-            
-            if st.button("🚀 Process All with Shadow DOM", type="primary"):
-                driver = setup_driver()
-                
-                try:
-                    results = []
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    for idx, row in df.iterrows():
-                        progress = (idx + 1) / len(df)
-                        progress_bar.progress(progress)
-                        status_text.text(f"Processing {idx+1}/{len(df)}: {row['Name']}")
-                        
-                        result = extract_badge_from_shadow_dom(driver, row['Salesforce URL'])
-                        
-                        results.append({
-                            'Roll Number': row['Roll Number'],
-                            'Name': row['Name'],
-                            'Salesforce URL': row['Salesforce URL'],
-                            'Badge Level': result['badge_level'],
-                            'Badge Image URL': result['badge_src'],
-                            'Alt Text': result['alt_text'],
-                            'Detection Method': result['detection_method'],
-                            'Status': result['status']
-                        })
-                        
-                        # Small delay between requests
-                        time.sleep(3)
-                    
-                    # Display results
-                    results_df = pd.DataFrame(results)
-                    
-                    st.success("🎉 Shadow DOM extraction completed!")
-                    
-                    # Summary
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("Total", len(results_df))
-                    
-                    with col2:
-                        successful = len(results_df[results_df['Status'] == 'Success'])
-                        st.metric("Successful", successful)
-                    
-                    with col3:
-                        innovators = len(results_df[results_df['Badge Level'] == 'Innovator'])
-                        st.metric("Innovators", innovators)
-                    
-                    with col4:
-                        champions = len(results_df[results_df['Badge Level'] == 'Champion'])
-                        st.metric("Champions", champions)
-                    
-                    # Results table
-                    st.dataframe(results_df)
-                    
-                    # Download
-                    csv_data = results_df.to_csv(index=False)
-                    st.download_button(
-                        "📥 Download Shadow DOM Results",
-                        csv_data,
-                        f"shadow_dom_badge_results_{int(time.time())}.csv",
-                        "text/csv"
-                    )
-                
-                finally:
-                    driver.quit()
+        1. **"No Badge Found"**: 
+           - Profile might be private
+           - User might not have Agentblazer badges
+           - Badge might be in different Shadow DOM structure
+        
+        2. **"Error in processing"**: 
+           - Network connectivity issues
+           - Profile URL might be incorrect
+           - Chrome driver compatibility
+        
+        3. **Empty Results**: 
+           - Salesforce might have changed their DOM structure
+           - Anti-bot protection might be active
+           - Profile content is loading dynamically
+        
+        ### **Manual Verification:**
+        1. Open the profile URL in a browser
+        2. Look for Agentblazer badge images
+        3. Use browser inspect element to verify Shadow DOM structure
+        4. Check if badges are visible without JavaScript
+        """)
 
 if __name__ == "__main__":
     main()
