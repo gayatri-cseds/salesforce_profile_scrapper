@@ -5,3 +5,7 @@ webdriver-manager
 beautifulsoup4
 requests
 lxml
+Pillow
+pytesseract
+opencv-python
+numpy
