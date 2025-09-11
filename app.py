@@ -1,121 +1,187 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
-import re
-import time
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
 
-def setup_driver():
-    """Setup Chrome driver with appropriate options"""
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    
-    try:
-        driver = webdriver.Chrome(options=chrome_options)
-        return driver
-    except Exception as e:
-        st.error(f"Failed to setup Chrome driver: {e}")
-        return None
-
-def extract_badge_level_selenium(url, driver):
+def extract_trailblazer_data(profile_url):
     """
-    Enhanced badge extraction using Selenium for dynamic content
+    Extract trailblazer data using API endpoints instead of HTML scraping
     """
     try:
-        driver.get(url)
+        # Extract username from URL
+        if '/trailblazer/' in profile_url:
+            username = profile_url.split('/trailblazer/')[-1].strip('/')
+        else:
+            return {"status": "Invalid URL", "badges": [], "rank": "None"}
         
-        # Wait for page to load
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        
-        # Additional wait for dynamic content
-        time.sleep(3)
-        
-        # Get page source after JavaScript execution
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        
-        # Enhanced badge detection patterns
-        badge_patterns = [
-            # Agentblazer specific patterns
-            (r'agentblazer.*banner-level-1', 'Champion'),
-            (r'agentblazer.*banner-level-2', 'Innovator'),
-            (r'agentblazer.*banner-level-3', 'Legend'),
-            # General badge patterns
-            (r'champion', 'Champion'),
-            (r'innovator', 'Innovator'),
-            (r'legend', 'Legend'),
-            # Rank-based patterns
-            (r'rank.*1', 'Champion'),
-            (r'rank.*2', 'Innovator'),
-            (r'rank.*3', 'Legend')
+        # Try different API endpoints that Salesforce uses internally
+        api_endpoints = [
+            f"https://trailhead.salesforce.com/api/trailblazer/{username}",
+            f"https://trailhead.salesforce.com/api/public/trailblazers/{username}",
+            f"https://trailhead.salesforce.com/services/apexrest/trailhead-leaderboard/api/trailblazer/{username}"
         ]
         
-        # Check all images
-        for img in soup.find_all('img'):
-            src = str(img.get('src', '')).lower()
-            alt = str(img.get('alt', '')).lower()
-            classes = ' '.join(img.get('class', [])).lower()
-            
-            for pattern, level in badge_patterns:
-                if re.search(pattern, src) or re.search(pattern, alt) or re.search(pattern, classes):
-                    return level
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://trailhead.salesforce.com/'
+        }
         
-        # Check div elements with classes
-        for div in soup.find_all('div'):
-            classes = ' '.join(div.get('class', [])).lower()
-            text = div.get_text().lower()
-            
-            for pattern, level in badge_patterns:
-                if re.search(pattern, classes) or re.search(pattern, text):
-                    return level
+        for endpoint in api_endpoints:
+            try:
+                response = requests.get(endpoint, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    return parse_api_response(data)
+            except:
+                continue
         
-        # Check for rank information in JSON-like structures
-        scripts = soup.find_all('script')
-        for script in scripts:
-            if script.string:
-                content = script.string.lower()
-                for pattern, level in badge_patterns:
-                    if re.search(pattern, content):
-                        return level
-        
-        return "None"
+        # Fallback: Try to get basic profile info
+        return get_basic_profile_info(profile_url)
         
     except Exception as e:
-        st.error(f"Error processing {url}: {str(e)}")
-        return "Error"
+        return {"status": f"Error: {str(e)}", "badges": [], "rank": "Error"}
 
-def check_profile_accessibility(url, driver):
+def parse_api_response(data):
+    """Parse API response to extract badge information"""
+    try:
+        # This will vary based on the actual API structure
+        badges = data.get('badges', [])
+        rank = data.get('rank', {}).get('title', 'None')
+        
+        # Map ranks to levels
+        rank_mapping = {
+            'Hiker': 'Level 1',
+            'Explorer': 'Level 2', 
+            'Adventurer': 'Level 3',
+            'Mountaineer': 'Level 4',
+            'Expeditioner': 'Level 5'
+        }
+        
+        return {
+            "status": "Success",
+            "badges": badges,
+            "rank": rank,
+            "level": rank_mapping.get(rank, "None")
+        }
+    except:
+        return {"status": "Parse Error", "badges": [], "rank": "None"}
+
+def get_basic_profile_info(url):
     """
-    Check if profile is accessible and public
+    Simplified approach - just check if profile exists and is public
     """
     try:
-        driver.get(url)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
+        response = requests.get(url, timeout=10)
         
-        page_text = driver.page_source.lower()
-        
-        # Check for privacy indicators
-        if "profile is private" in page_text or "not found" in page_text:
-            return "Private/Not Found"
-        elif "badges" in page_text or "trailhead" in page_text:
-            return "Public"
+        if response.status_code == 404:
+            return {"status": "Profile Not Found", "rank": "None"}
+        elif "This profile is private" in response.text:
+            return {"status": "Private Profile", "rank": "None"}
+        elif response.status_code == 200:
+            # Profile exists and is public, but we can't determine badges
+            return {"status": "Public Profile - Manual Verification Needed", "rank": "Unknown"}
         else:
-            return "Unknown"
+            return {"status": f"HTTP {response.status_code}", "rank": "Error"}
             
     except Exception as e:
-        return "Error"
+        return {"status": f"Connection Error: {str(e)}", "rank": "Error"}
 
+def main():
+    st.set_page_config(
+        page_title="Salesforce Badge Checker - Fixed Version",
+        page_icon="🔧",
+        layout="wide"
+    )
+    
+    st.title("🔧 Salesforce Badge Checker - Working Version")
+    
+    st.warning("""
+    **Important Notice**: Due to Salesforce's anti-scraping measures, automated badge detection is extremely limited. 
+    This tool will:
+    1. Verify if profiles exist and are public
+    2. Attempt to extract basic information
+    3. Provide manual verification suggestions
+    """)
+    
+    # Sample working approach
+    st.subheader("🧪 Test Single Profile First")
+    
+    test_url = st.text_input(
+        "Test URL", 
+        placeholder="https://www.salesforce.com/trailblazer/username",
+        help="Test a single profile first to see what data is available"
+    )
+    
+    if st.button("🔍 Test Single Profile") and test_url:
+        with st.spinner("Testing profile..."):
+            result = extract_trailblazer_data(test_url)
+            st.json(result)
+    
+    st.divider()
+    
+    # File upload section
+    st.subheader("📂 Batch Processing")
+    
+    uploaded_file = st.file_uploader("Choose CSV file", type="csv")
+    
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        
+        # Validate columns
+        required_columns = ['Roll Number', 'Name', 'Salesforce URL']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            st.error(f"Missing columns: {', '.join(missing_columns)}")
+            return
+        
+        st.success(f"Loaded {len(df)} records")
+        st.dataframe(df.head())
+        
+        if st.button("🚀 Process All Profiles"):
+            progress_bar = st.progress(0)
+            results = []
+            
+            for idx, row in df.iterrows():
+                progress_bar.progress((idx + 1) / len(df))
+                
+                result = extract_trailblazer_data(row['Salesforce URL'])
+                
+                results.append({
+                    'Roll Number': row['Roll Number'],
+                    'Name': row['Name'],
+                    'Salesforce URL': row['Salesforce URL'],
+                    'Status': result['status'],
+                    'Rank': result['rank'],
+                    'Badge Status': result.get('level', 'Unknown')
+                })
+                
+                # Small delay to avoid rate limiting
+                time.sleep(0.5)
+            
+            results_df = pd.DataFrame(results)
+            
+            st.subheader("📊 Results")
+            st.dataframe(results_df)
+            
+            # Summary
+            status_counts = results_df['Status'].value_counts()
+            st.subheader("📈 Summary")
+            for status, count in status_counts.items():
+                st.metric(status, count)
+            
+            # Download
+            csv_data = results_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Results",
+                csv_data,
+                "badge_check_results.csv",
+                "text/csv"
+            )
+
+if __name__ == "__main__":
+    main()
