@@ -1,294 +1,494 @@
 import streamlit as st
 import pandas as pd
+import requests
+from typing import Dict, List, Tuple
+from urllib.parse import urlparse
+import re
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+import time
 
-# Define Agentblazer requirements
+# Complete Agentblazer Requirements Database
 AGENTBLAZER_REQUIREMENTS = {
     "Champion": {
-        "required_trails": [
-            "become-an-agentblazer-champion",
-            "agentforce-fundamentals"
+        "modules": [
+            "Artificial Intelligence Fundamentals",
+            "Generative AI Basics", 
+            "Natural Language Processing Basics",
+            "Large Language Models",
+            "Data Fundamentals for AI",
+            "Data+AI+CRM: Quick Look",
+            "Prompt Fundamentals",
+            "Prompt Builder Basics",
+            "The Einstein Trust Layer",
+            "Autonomous Agents",
+            "Introduction to Agentforce",
+            "Introduction to Agentforce Builder",
+            "Agentforce for Service",
+            "Agentforce for Sales: Quick Look"
         ],
-        "required_badges": [
-            "Agent Builder Basics",
-            "AI Fundamentals", 
-            "Data Cloud Basics",
-            "Agentforce Service Basics"
+        "projects": [
+            "Quick Start: Build a Service Agent with Agentforce",
+            "Connect Data Cloud to Agentforce and Prompt Builder"
         ],
-        "minimum_points": 2500,
-        "required_superbadges": [],
-        "description": "Build foundational AI and agent skills"
+        "superbadges": [],
+        "certifications": [],
+        "description": "Foundation-level AI and Agentforce skills",
+        "min_points": 2500
     },
+    
     "Innovator": {
-        "required_trails": [
-            "become-an-agentblazer-champion",
-            "agentforce-fundamentals",
-            "advanced-agent-building"
+        "modules": [
+            "AI Strategy",
+            "AI+Data: Project Planning", 
+            "Agentforce: Agent Planning",
+            "Trusted Agentic AI",
+            "Agentforce Builder Basics",
+            "Agentforce SDR Setup and Customization",
+            "Agentforce Sales Coach Setup and Customization"
         ],
-        "required_badges": [
-            "Agent Builder Basics",
-            "AI Fundamentals",
-            "Data Cloud Basics", 
-            "Agentforce Service Basics",
-            "Prompt Builder Templates",
+        "projects": [
+            "Quick Start: Agent Actions",
+            "Customize a Service Agent with Prompts, Flows and Actions",
+            "Build Your First Sales Coach"
         ],
-        "minimum_points": 7900,
-        "required_superbadges": [
-            "Prompt Builder Templates Superbadge",
-            "Agentforce for Service Superbadge"
+        "superbadges": [
+            "Agentforce for Service Superbadge Unit"
         ],
-        "description": "Create custom agents and handle complex use cases"
+        "certifications": [],
+        "description": "Intermediate agent building and customization",
+        "min_points": 7500
     },
+    
     "Legend": {
-        "required_trails": [
-            "become-an-agentblazer-champion",
-            "agentforce-fundamentals", 
-            "advanced-agent-building",
-            "agentforce-specialist-prep"
+        "modules": [
+            "Cert Prep: Agentforce Specialist",
+            "Agent Customization: Quick Look",
+            "Service Agent Customization with Prompt Builder",
+            "Prompt Engineering Techniques",
+            "Agent Customization with Flows", 
+            "Agent Customization with Apex",
+            "Grounding an Agent with Data",
+            "Data Cloud-Powered Experiences",
+            "Search Index Types in Data Cloud: Quick Look",
+            "Retrieval Augmented Generation: Quick Look",
+            "Agentforce Data Library Basics",
+            "Agentforce Testing Tools and Strategies",
+            "Agentforce Testing Center",
+            "Agentforce Analytics and Monitoring",
+            "Agentforce Configuration for Slack Deployment",
+            "Agent API: Quick Look",
+            "Get Started with the Models API"
         ],
-        "required_badges": [
-            "Agent Builder Basics",
-            "AI Fundamentals",
-            "Data Cloud Basics",
-            "Agentforce Service Basics", 
-            "Prompt Builder Templates",
-            "Service Cloud Agent Builder",
-            "Advanced Agent Lifecycle",
-            "Enterprise Agent Management"
+        "projects": [
+            "Deploy Agent Authentication",
+            "Unstructured Data in Data Cloud",
+            "Quick Start: Create Employee Agents in Agentforce",
+            "Connect Your Agentforce Org with Slack",
+            "Create an Agent Using Agentforce DX"
         ],
-        "minimum_points": 15000,
-        "required_superbadges": [
-            "Prompt Builder Templates Superbadge",
-            "Agentforce for Service Superbadge",
-            "Apex for Agentforce Superbadge"
+        "superbadges": [
+            "Superbadge: Advanced Flow for Agentforce",
+            "Superbadge: Apex for Agentforce"
         ],
-        "description": "Master enterprise-level agent strategies and lifecycle management"
+        "certifications": [
+            "Earn your Agentforce Specialist Certification"
+        ],
+        "description": "Advanced enterprise-level agent development and certification",
+        "min_points": 15000
     }
 }
-def analyze_student_profile(profile_url, requirements_level="Champion"):
+
+def extract_user_data_from_profile(profile_url: str) -> Dict:
     """
-    Analyze student's Trailhead profile against Agentblazer requirements
+    Extract user completion data from Trailhead profile URL
+    This function scrapes the actual profile page to get real data
     """
+    try:
+        # Setup Chrome driver for scraping
+        options = Options()
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        
+        # Navigate to profile
+        driver.get(profile_url)
+        time.sleep(10)  # Wait for page load
+        
+        # Extract data from page source
+        page_source = driver.page_source
+        
+        # Parse completed modules, projects, superbadges
+        # This is a simplified extraction - you'd need to enhance this
+        # based on the actual HTML structure of Trailhead profiles
+        
+        modules = []
+        projects = []
+        superbadges = []
+        certifications = []
+        points = 0
+        
+        # Extract points (look for point total)
+        points_match = re.search(r'(\d+,?\d*)\s*points?', page_source, re.IGNORECASE)
+        if points_match:
+            points = int(points_match.group(1).replace(',', ''))
+        
+        # Extract badges/modules (look for completed items)
+        # This would need to be enhanced based on actual HTML structure
+        module_matches = re.findall(r'completed.*?([A-Za-z\s]+(?:Fundamentals|Basics|Introduction))', page_source, re.IGNORECASE)
+        modules.extend(module_matches)
+        
+        project_matches = re.findall(r'completed.*?([A-Za-z\s]*Quick Start[A-Za-z\s]*)', page_source, re.IGNORECASE)
+        projects.extend(project_matches)
+        
+        superbadge_matches = re.findall(r'completed.*?([A-Za-z\s]*Superbadge[A-Za-z\s]*)', page_source, re.IGNORECASE)
+        superbadges.extend(superbadge_matches)
+        
+        driver.quit()
+        
+        return {
+            "modules": modules,
+            "projects": projects, 
+            "superbadges": superbadges,
+            "certifications": certifications,
+            "points": points
+        }
+        
+    except Exception as e:
+        st.error(f"Error extracting data from profile: {str(e)}")
+        return {
+            "modules": [],
+            "projects": [],
+            "superbadges": [],
+            "certifications": [],
+            "points": 0
+        }
+
+def normalize_text(text: str) -> str:
+    """Normalize text for comparison"""
+    return ' '.join(text.lower().split())
+
+def verify_agentblazer_requirements(profile_data: Dict, target_level: str) -> Dict:
+    """
+    Verify if profile meets Agentblazer requirements for target level
+    """
+    if target_level not in AGENTBLAZER_REQUIREMENTS:
+        return {"error": f"Invalid level: {target_level}"}
     
-    # This would extract data from the student's public profile
-    profile_data = extract_profile_data(profile_url)
-    
-    requirements = AGENTBLAZER_REQUIREMENTS[requirements_level]
+    requirements = AGENTBLAZER_REQUIREMENTS[target_level]
     
     verification_results = {
-        "student_profile": profile_url,
-        "target_level": requirements_level,
-        "total_points": profile_data.get("points", 0),
-        "completed_badges": profile_data.get("badges", []),
-        "completed_trails": profile_data.get("trails", []),
-        "completed_superbadges": profile_data.get("superbadges", []),
-        "verification_status": {},
-        "overall_qualified": False
+        "profile_data": profile_data,
+        "target_level": target_level,
+        "requirements": requirements,
+        "overall_qualified": False,
+        "detailed_analysis": {}
     }
     
-    # Check point requirements
-    points_qualified = verification_results["total_points"] >= requirements["minimum_points"]
-    verification_results["verification_status"]["points"] = {
-        "required": requirements["minimum_points"],
-        "actual": verification_results["total_points"],
-        "qualified": points_qualified
+    # Check points requirement
+    points_qualified = profile_data["points"] >= requirements["min_points"]
+    verification_results["detailed_analysis"]["points"] = {
+        "required": requirements["min_points"],
+        "actual": profile_data["points"],
+        "qualified": points_qualified,
+        "completion_percentage": min(100, (profile_data["points"] / requirements["min_points"]) * 100)
     }
     
-    # Check badge requirements
-    badges_completed = []
-    badges_missing = []
+    # Check each category
+    categories = ["modules", "projects", "superbadges", "certifications"]
+    all_requirements_met = points_qualified
     
-    for required_badge in requirements["required_badges"]:
-        if any(required_badge.lower() in badge.lower() for badge in verification_results["completed_badges"]):
-            badges_completed.append(required_badge)
-        else:
-            badges_missing.append(required_badge)
+    for category in categories:
+        required_items = requirements.get(category, [])
+        user_items = profile_data.get(category, [])
+        
+        if not required_items:  # Skip empty categories
+            continue
+            
+        # Normalize for comparison
+        required_normalized = {normalize_text(item) for item in required_items}
+        user_normalized = {normalize_text(item) for item in user_items}
+        
+        # Find matches
+        completed_items = []
+        for req_item in required_normalized:
+            for user_item in user_normalized:
+                if req_item in user_item or user_item in req_item:
+                    completed_items.append(req_item)
+                    break
+        
+        completed_count = len(completed_items)
+        required_count = len(required_items)
+        missing_count = required_count - completed_count
+        category_qualified = missing_count == 0
+        
+        if not category_qualified:
+            all_requirements_met = False
+        
+        verification_results["detailed_analysis"][category] = {
+            "required_count": required_count,
+            "completed_count": completed_count,
+            "missing_count": missing_count,
+            "qualified": category_qualified,
+            "completion_percentage": (completed_count / required_count * 100) if required_count > 0 else 100,
+            "missing_items": [item for item in required_items if normalize_text(item) not in [normalize_text(c) for c in completed_items]]
+        }
     
-    badges_qualified = len(badges_missing) == 0
-    verification_results["verification_status"]["badges"] = {
-        "required": requirements["required_badges"],
-        "completed": badges_completed,
-        "missing": badges_missing,
-        "qualified": badges_qualified
-    }
+    verification_results["overall_qualified"] = all_requirements_met
     
-    # Check superbadge requirements  
-    superbadges_completed = []
-    superbadges_missing = []
-    
-    for required_superbadge in requirements["required_superbadges"]:
-        if any(required_superbadge.lower() in superbadge.lower() for superbadge in verification_results["completed_superbadges"]):
-            superbadges_completed.append(required_superbadge)
-        else:
-            superbadges_missing.append(required_superbadge)
-    
-    superbadges_qualified = len(superbadges_missing) == 0
-    verification_results["verification_status"]["superbadges"] = {
-        "required": requirements["required_superbadges"],
-        "completed": superbadges_completed, 
-        "missing": superbadges_missing,
-        "qualified": superbadges_qualified
-    }
-    
-    # Overall qualification
-    verification_results["overall_qualified"] = (
-        points_qualified and badges_qualified and superbadges_qualified
-    )
-    
-    # Assign badge level
-    if verification_results["overall_qualified"]:
-        verification_results["earned_badge"] = requirements_level
+    if all_requirements_met:
+        verification_results["badge_awarded"] = target_level
     else:
-        verification_results["earned_badge"] = "Not Qualified"
+        verification_results["badge_awarded"] = "Not Qualified"
     
     return verification_results
 
 def main():
-    st.title("🏆 Agentblazer Badge Verification System")
+    st.set_page_config(
+        page_title="Agentblazer Badge Verifier",
+        page_icon="🏆",
+        layout="wide"
+    )
     
-    st.success("✅ Define your own requirements and verify student achievements!")
+    st.title("🏆 Real-Time Agentblazer Badge Verification")
+    st.success("✅ Enter a Trailhead profile URL to verify badge eligibility!")
     
-    # Show requirements
-    st.subheader("📋 Agentblazer Requirements")
-    
-    level_tab1, level_tab2, level_tab3 = st.tabs(["Champion", "Innovator", "Legend"])
-    
-    with level_tab1:
-        req = AGENTBLAZER_REQUIREMENTS["Champion"]
-        st.write(f"**Description:** {req['description']}")
-        st.write(f"**Minimum Points:** {req['minimum_points']:,}")
-        st.write(f"**Required Badges:** {len(req['required_badges'])}")
-        with st.expander("View Required Badges"):
-            for badge in req['required_badges']:
-                st.write(f"• {badge}")
-    
-    with level_tab2:
-        req = AGENTBLAZER_REQUIREMENTS["Innovator"] 
-        st.write(f"**Description:** {req['description']}")
-        st.write(f"**Minimum Points:** {req['minimum_points']:,}")
-        st.write(f"**Required Badges:** {len(req['required_badges'])}")
-        st.write(f"**Required Superbadges:** {len(req['required_superbadges'])}")
-        with st.expander("View All Requirements"):
-            st.write("**Badges:**")
-            for badge in req['required_badges']:
-                st.write(f"• {badge}")
-            st.write("**Superbadges:**")
-            for superbadge in req['required_superbadges']:
-                st.write(f"• {superbadge}")
-    
-    with level_tab3:
-        req = AGENTBLAZER_REQUIREMENTS["Legend"]
-        st.write(f"**Description:** {req['description']}")
-        st.write(f"**Minimum Points:** {req['minimum_points']:,}")
-        st.write(f"**Required Badges:** {len(req['required_badges'])}")
-        st.write(f"**Required Superbadges:** {len(req['required_superbadges'])}")
-    
-    # Student verification
-    st.subheader("🎯 Student Verification")
-    
-    profile_url = st.text_input("Student Profile URL:")
-    target_level = st.selectbox("Target Badge Level:", ["Champion", "Innovator", "Legend"])
-    
-    if st.button("🔍 Verify Student Qualifications"):
-        if profile_url:
-            with st.spinner(f"Analyzing profile for {target_level} level..."):
-                # results = analyze_student_profile(profile_url, target_level)
+    # Requirements Overview
+    with st.expander("📋 View Agentblazer Requirements", expanded=False):
+        tab1, tab2, tab3 = st.tabs(["🥉 Champion", "🥈 Innovator", "🥇 Legend"])
+        
+        for tab, (level, req) in zip([tab1, tab2, tab3], AGENTBLAZER_REQUIREMENTS.items()):
+            with tab:
+                st.write(f"**Description:** {req['description']}")
+                st.write(f"**Minimum Points:** {req['min_points']:,}")
                 
-                # Demo results (replace with actual verification)
-                results = {
-                    "student_profile": profile_url,
-                    "target_level": target_level,
-                    "total_points": 8500,
-                    "earned_badge": "Innovator" if target_level == "Innovator" else "Not Qualified",
-                    "overall_qualified": target_level == "Innovator",
-                    "verification_status": {
-                        "points": {"required": 7900, "actual": 8500, "qualified": True},
-                        "badges": {"missing": ["Service Cloud Agent Builder"], "qualified": False},
-                        "superbadges": {"missing": [], "qualified": True}
-                    }
-                }
+                col1, col2 = st.columns(2)
+                with col1:
+                    if req['modules']:
+                        st.write(f"**📚 Modules Required:** {len(req['modules'])}")
+                        with st.expander("View Required Modules"):
+                            for i, module in enumerate(req['modules'], 1):
+                                st.write(f"{i}. {module}")
+                    
+                    if req['projects']:
+                        st.write(f"**🚀 Projects Required:** {len(req['projects'])}")
+                        with st.expander("View Required Projects"):
+                            for i, project in enumerate(req['projects'], 1):
+                                st.write(f"{i}. {project}")
+                
+                with col2:
+                    if req['superbadges']:
+                        st.write(f"**🏆 Superbadges Required:** {len(req['superbadges'])}")
+                        with st.expander("View Required Superbadges"):
+                            for i, superbadge in enumerate(req['superbadges'], 1):
+                                st.write(f"{i}. {superbadge}")
+                    
+                    if req['certifications']:
+                        st.write(f"**🎓 Certifications Required:** {len(req['certifications'])}")
+                        with st.expander("View Required Certifications"):
+                            for i, cert in enumerate(req['certifications'], 1):
+                                st.write(f"{i}. {cert}")
+    
+    # Single Profile Verification
+    st.subheader("🎯 Profile Verification")
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        profile_url = st.text_input(
+            "📧 Enter Trailhead Profile URL:",
+            placeholder="https://trailhead.salesforce.com/profile/username",
+            help="Enter the complete Trailhead profile URL to verify"
+        )
+    
+    with col2:
+        target_level = st.selectbox(
+            "🎯 Target Badge Level:",
+            ["Champion", "Innovator", "Legend"]
+        )
+    
+    if st.button("🔍 Verify Badge Eligibility", type="primary"):
+        if not profile_url:
+            st.error("❌ Please enter a valid Trailhead profile URL")
+        elif not profile_url.startswith("https://trailhead.salesforce.com"):
+            st.error("❌ Please enter a valid Trailhead profile URL starting with https://trailhead.salesforce.com")
+        else:
+            with st.spinner(f"🔄 Analyzing profile for {target_level} badge eligibility..."):
+                # Extract real data from profile
+                profile_data = extract_user_data_from_profile(profile_url)
+                
+                if profile_data["points"] == 0 and not profile_data["modules"]:
+                    st.warning("⚠️ Could not extract data from profile. This may be due to:")
+                    st.write("• Profile is private or restricted")
+                    st.write("• Profile URL is incorrect")
+                    st.write("• Network/scraping restrictions")
+                    st.info("💡 Try entering profile data manually or use a different approach")
+                    return
+                
+                # Verify against requirements
+                verification_results = verify_agentblazer_requirements(profile_data, target_level)
             
             # Display results
-            if results["overall_qualified"]:
-                st.success(f"🎉 **QUALIFIED for {results['earned_badge']} badge!**")
+            st.subheader("📊 Verification Results")
+            
+            if verification_results["overall_qualified"]:
+                st.success(f"🎉 **QUALIFIED for {verification_results['badge_awarded']} Badge!**")
+                st.balloons()
             else:
                 st.warning(f"⚠️ **Not yet qualified for {target_level} badge**")
             
-            col1, col2, col3 = st.columns(3)
+            # Show profile data found
+            with st.expander("📋 Profile Data Extracted"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Points:** {profile_data['points']:,}")
+                    st.write(f"**Modules Found:** {len(profile_data['modules'])}")
+                    st.write(f"**Projects Found:** {len(profile_data['projects'])}")
+                with col2:
+                    st.write(f"**Superbadges Found:** {len(profile_data['superbadges'])}")
+                    st.write(f"**Certifications Found:** {len(profile_data['certifications'])}")
             
-            with col1:
-                points_status = results["verification_status"]["points"]
-                if points_status["qualified"]:
-                    st.success(f"✅ **Points:** {points_status['actual']:,} / {points_status['required']:,}")
-                else:
-                    st.error(f"❌ **Points:** {points_status['actual']:,} / {points_status['required']:,}")
-            
-            with col2:
-                badges_status = results["verification_status"]["badges"]
-                if badges_status["qualified"]:
-                    st.success("✅ **All Badges Complete**")
-                else:
-                    st.error(f"❌ **Missing {len(badges_status['missing'])} Badges**")
-                    if badges_status.get("missing"):
-                        with st.expander("Missing Badges"):
-                            for badge in badges_status["missing"]:
-                                st.write(f"• {badge}")
-            
-            with col3:
-                superbadges_status = results["verification_status"]["superbadges"]
-                if superbadges_status["qualified"]:
-                    st.success("✅ **All Superbadges Complete**")
-                else:
-                    st.error(f"❌ **Missing {len(superbadges_status['missing'])} Superbadges**")
+            # Detailed requirements analysis
+            for category, analysis in verification_results["detailed_analysis"].items():
+                if category == "points":
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        if analysis["qualified"]:
+                            st.success("✅ **Points**")
+                        else:
+                            st.error("❌ **Points**")
+                    with col2:
+                        progress = min(1.0, analysis["completion_percentage"] / 100)
+                        st.progress(progress, text=f"{analysis['actual']:,} / {analysis['required']:,} points ({analysis['completion_percentage']:.1f}%)")
+                
+                elif analysis["required_count"] > 0:
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    
+                    with col1:
+                        if analysis["qualified"]:
+                            st.success(f"✅ **{category.title()}**")
+                        else:
+                            st.error(f"❌ **{category.title()}**")
+                    
+                    with col2:
+                        progress = analysis["completion_percentage"] / 100
+                        st.progress(progress, text=f"{analysis['completed_count']}/{analysis['required_count']} completed ({analysis['completion_percentage']:.0f}%)")
+                    
+                    with col3:
+                        if not analysis["qualified"] and analysis["missing_count"] > 0:
+                            with st.expander(f"Missing ({analysis['missing_count']})"):
+                                for missing_item in analysis["missing_items"]:
+                                    st.write(f"• {missing_item}")
     
-    # Batch verification
-    st.subheader("📂 Batch Student Verification")
+    # Batch Processing
+    st.divider()
+    st.subheader("📂 Batch Profile Verification")
     
-    uploaded_file = st.file_uploader("Upload Student CSV", type="csv")
+    uploaded_file = st.file_uploader("Upload CSV with profile URLs", type="csv")
     
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
-        st.dataframe(df.head())
         
-        batch_level = st.selectbox("Verification Level:", ["Champion", "Innovator", "Legend"], key="batch")
+        required_columns = ["Roll Number", "Name", "Salesforce URL"]
+        if all(col in df.columns for col in required_columns):
+            st.success(f"✅ Loaded {len(df)} students for verification")
+            st.dataframe(df.head())
+            
+            batch_level = st.selectbox("Batch Verification Level:", ["Champion", "Innovator", "Legend"], key="batch")
+            max_profiles = st.number_input("Max profiles to process:", 1, len(df), min(5, len(df)))
+            
+            if st.button("🚀 Start Batch Verification", type="primary"):
+                batch_results = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for idx, row in df.head(max_profiles).iterrows():
+                    progress = (idx + 1) / max_profiles
+                    progress_bar.progress(progress)
+                    status_text.text(f"Verifying {idx+1}/{max_profiles}: {row['Name']}")
+                    
+                    # Extract profile data
+                    profile_data = extract_user_data_from_profile(row['Salesforce URL'])
+                    
+                    # Verify requirements
+                    verification = verify_agentblazer_requirements(profile_data, batch_level)
+                    
+                    batch_results.append({
+                        "Roll Number": row["Roll Number"],
+                        "Name": row["Name"],
+                        "Profile URL": row["Salesforce URL"],
+                        "Target Level": batch_level,
+                        "Points": profile_data["points"],
+                        "Qualified": "Yes" if verification["overall_qualified"] else "No",
+                        "Badge Awarded": verification["badge_awarded"],
+                        "Overall Progress": f"{sum(1 for cat in verification['detailed_analysis'].values() if cat.get('qualified', False))}/{len([cat for cat in verification['detailed_analysis'].values() if cat.get('required_count', 0) > 0])}"
+                    })
+                
+                # Display results
+                results_df = pd.DataFrame(batch_results)
+                
+                # Summary
+                qualified_count = len(results_df[results_df["Qualified"] == "Yes"])
+                total_count = len(results_df)
+                avg_points = results_df["Points"].mean()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Processed", total_count)
+                with col2:
+                    st.metric("Qualified", qualified_count)
+                with col3:
+                    st.metric("Success Rate", f"{(qualified_count/total_count)*100:.1f}%")
+                with col4:
+                    st.metric("Avg Points", f"{avg_points:,.0f}")
+                
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Download
+                csv_data = results_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Verification Results",
+                    csv_data,
+                    f"agentblazer_{batch_level.lower()}_verification_results.csv",
+                    "text/csv"
+                )
         
-        if st.button("🚀 Verify All Students"):
-            results = []
-            progress_bar = st.progress(0)
-            
-            for idx, row in df.iterrows():
-                progress_bar.progress((idx + 1) / len(df))
-                
-                # Simulate verification (replace with actual analysis)
-                qualified = idx % 3 != 0  # Demo: 2/3 qualify
-                
-                results.append({
-                    "Name": row["Name"],
-                    "Roll Number": row["Roll Number"], 
-                    "Profile URL": row["Salesforce URL"],
-                    "Target Level": batch_level,
-                    "Qualified": "Yes" if qualified else "No",
-                    "Badge Awarded": batch_level if qualified else "Not Qualified"
-                })
-            
-            results_df = pd.DataFrame(results)
-            
-            # Summary
-            qualified_count = len(results_df[results_df["Qualified"] == "Yes"])
-            total_count = len(results_df)
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Students", total_count)
-            with col2:
-                st.metric("Qualified", qualified_count)
-            with col3:
-                st.metric("Qualification Rate", f"{(qualified_count/total_count)*100:.1f}%")
-            
-            st.dataframe(results_df)
-            
-            # Download results
-            csv_data = results_df.to_csv(index=False)
-            st.download_button("📥 Download Results", csv_data, "agentblazer_verification.csv")
+        else:
+            st.error(f"❌ CSV must contain columns: {', '.join(required_columns)}")
+    
+    # Footer
+    st.divider()
+    with st.expander("ℹ️ How This Works & Troubleshooting"):
+        st.markdown("""
+        ### **🔍 How the Verification Works:**
+        
+        1. **Profile Data Extraction** - Scrapes actual completion data from Trailhead profiles
+        2. **Requirements Matching** - Compares against official Agentblazer criteria
+        3. **Automatic Verification** - Determines qualification based on completions
+        4. **Badge Awarding** - Awards appropriate badge level for qualified profiles
+        
+        ### **⚠️ Common Issues:**
+        
+        - **Private Profiles**: Cannot extract data from private/restricted profiles
+        - **Network Issues**: Scraping may fail due to connectivity or anti-bot measures  
+        - **URL Format**: Must use complete Trailhead profile URL
+        - **Loading Time**: Profile verification takes 10-15 seconds per student
+        
+        ### **💡 Tips for Best Results:**
+        
+        - Ensure profile URLs are public and accessible
+        - Test with one profile before batch processing
+        - Use smaller batches (5-10 profiles) for better reliability
+        - Students should make their profiles public before verification
+        """)
 
 if __name__ == "__main__":
     main()
