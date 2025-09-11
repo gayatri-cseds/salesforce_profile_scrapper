@@ -11,7 +11,7 @@ import time
 import re
 
 def setup_driver():
-    """Setup Chrome driver for JavaScript execution"""
+    """Setup Chrome driver with debugging enabled"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -26,203 +26,213 @@ def setup_driver():
         st.error(f"Chrome driver setup failed: {e}")
         return None
 
-def detect_badge_level(profile_url, driver):
+def debug_badge_detection(profile_url, driver):
     """
-    Detect badge level from agentblazer banner images
+    Debug version that shows exactly what's found on the page
     """
     try:
-        # Load the page
+        st.info(f"🔍 Loading: {profile_url}")
         driver.get(profile_url)
         
-        # Wait for JavaScript to load
+        # Wait for page load
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         
         # Additional wait for dynamic content
-        time.sleep(5)
+        time.sleep(8)  # Increased wait time
         
-        # Get page source after JavaScript execution
+        # Get page source
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
-        # Look for the specific agentblazer banner patterns
-        badge_patterns = [
-            (r'agentblazer/banner-level-3\.png', 'Legend'),
-            (r'agentblazer/banner-level-2\.png', 'Innovator'), 
-            (r'agentblazer/banner-level-1\.png', 'Champion')
-        ]
-        
-        # Check all images in the page
+        # Debug: Show all images found
+        st.subheader("🖼️ All Images Found on Page:")
         images = soup.find_all('img')
+        st.write(f"Total images found: {len(images)}")
         
-        for img in images:
+        agentblazer_images = []
+        for idx, img in enumerate(images):
             src = str(img.get('src', ''))
             alt = str(img.get('alt', ''))
             
-            # Check each pattern
-            for pattern, level in badge_patterns:
-                if re.search(pattern, src, re.IGNORECASE):
-                    return level
-                    
-                # Also check alt text for additional confirmation
-                if 'agentblazer' in alt.lower():
-                    if 'legend' in alt.lower() or 'level 3' in alt.lower():
-                        return 'Legend'
-                    elif 'innovator' in alt.lower() or 'level 2' in alt.lower():
-                        return 'Innovator'
-                    elif 'champion' in alt.lower() or 'level 1' in alt.lower():
-                        return 'Champion'
+            # Show first 10 images for debugging
+            if idx < 10:
+                st.write(f"**Image {idx + 1}:**")
+                st.write(f"- src: `{src}`")
+                st.write(f"- alt: `{alt}`")
+                
+            # Check for agentblazer patterns
+            if 'agentblazer' in src.lower() or 'agentblazer' in alt.lower():
+                agentblazer_images.append({'src': src, 'alt': alt})
         
-        return "None"
+        st.subheader("🤖 Agentblazer Images Found:")
+        if agentblazer_images:
+            for img in agentblazer_images:
+                st.write(f"- **src:** `{img['src']}`")
+                st.write(f"- **alt:** `{img['alt']}`")
+        else:
+            st.warning("❌ No agentblazer images found")
+        
+        # Debug: Search for any "level" or "banner" text
+        st.subheader("🔍 Text Content Analysis:")
+        page_text = soup.get_text().lower()
+        
+        level_keywords = ['level-1', 'level-2', 'level-3', 'banner-level', 'innovator', 'champion', 'legend', 'agentblazer']
+        found_keywords = []
+        
+        for keyword in level_keywords:
+            if keyword in page_text:
+                found_keywords.append(keyword)
+        
+        if found_keywords:
+            st.success(f"✅ Found keywords: {', '.join(found_keywords)}")
+        else:
+            st.warning("❌ No relevant keywords found in page text")
+        
+        # Debug: Check for specific div/span elements
+        st.subheader("🏷️ Badge-related Elements:")
+        badge_elements = soup.find_all(['div', 'span', 'section'], 
+                                     class_=re.compile(r'badge|level|agentblazer|innovator|champion|legend', re.I))
+        
+        if badge_elements:
+            for idx, elem in enumerate(badge_elements[:5]):  # Show first 5
+                st.write(f"**Element {idx + 1}:**")
+                st.write(f"- Tag: `{elem.name}`")
+                st.write(f"- Classes: `{elem.get('class', [])}`")
+                st.write(f"- Text: `{elem.get_text().strip()[:100]}...`")
+        else:
+            st.warning("❌ No badge-related elements found")
+        
+        # Enhanced badge detection
+        badge_level = enhanced_badge_detection(soup)
+        
+        return badge_level
         
     except Exception as e:
-        st.error(f"Error processing {profile_url}: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return "Error"
 
+def enhanced_badge_detection(soup):
+    """Enhanced detection with multiple fallback methods"""
+    
+    # Method 1: Direct image src matching
+    images = soup.find_all('img')
+    for img in images:
+        src = str(img.get('src', ''))
+        alt = str(img.get('alt', ''))
+        
+        # Check for exact patterns
+        if re.search(r'banner-level-3|level.*3', src, re.IGNORECASE):
+            return "Legend"
+        elif re.search(r'banner-level-2|level.*2', src, re.IGNORECASE):
+            return "Innovator"
+        elif re.search(r'banner-level-1|level.*1', src, re.IGNORECASE):
+            return "Champion"
+        
+        # Check alt text
+        if 'innovator' in alt.lower():
+            return "Innovator"
+        elif 'champion' in alt.lower():
+            return "Champion"
+        elif 'legend' in alt.lower():
+            return "Legend"
+    
+    # Method 2: Text-based detection
+    page_text = soup.get_text().lower()
+    
+    if any(word in page_text for word in ['agentblazer legend', 'banner-level-3']):
+        return "Legend"
+    elif any(word in page_text for word in ['agentblazer innovator', 'banner-level-2']):
+        return "Innovator"
+    elif any(word in page_text for word in ['agentblazer champion', 'banner-level-1']):
+        return "Champion"
+    
+    # Method 3: CSS class detection
+    badge_elements = soup.find_all(attrs={'class': re.compile(r'agentblazer|badge|level', re.I)})
+    
+    for elem in badge_elements:
+        text = elem.get_text().lower()
+        classes = ' '.join(elem.get('class', [])).lower()
+        
+        if any(word in text or word in classes for word in ['innovator', 'level-2', 'level 2']):
+            return "Innovator"
+        elif any(word in text or word in classes for word in ['champion', 'level-1', 'level 1']):
+            return "Champion"
+        elif any(word in text or word in classes for word in ['legend', 'level-3', 'level 3']):
+            return "Legend"
+    
+    return "None"
+
 def main():
-    st.set_page_config(
-        page_title="Agentblazer Badge Detector",
-        page_icon="🤖",
-        layout="wide"
-    )
+    st.title("🐛 Enhanced Badge Detector with Debugging")
+    st.success("This version shows exactly what's being detected on your profile")
     
-    st.title("🤖 Agentblazer Badge Level Detector")
-    st.success("✅ Detects JavaScript-loaded banner images: Champion | Innovator | Legend")
-    
-    st.info("""
-    **Detection Method**: Looks for specific agentblazer banner images:
-    - `banner-level-1.png` → Champion
-    - `banner-level-2.png` → Innovator  
-    - `banner-level-3.png` → Legend
-    """)
-    
-    # Single profile test
-    st.subheader("🧪 Test Single Profile")
-    
+    # Test URL input
     test_url = st.text_input(
-        "Profile URL:", 
-        placeholder="https://trailblazer.me/id/username or https://www.salesforce.com/trailblazer/username"
+        "Your Profile URL:", 
+        placeholder="Enter your trailblazer profile URL"
     )
     
-    if st.button("🔍 Test Badge Detection"):
+    if st.button("🔍 Debug Badge Detection"):
         if test_url:
             driver = setup_driver()
             if driver:
                 try:
-                    with st.spinner("Loading profile and detecting badges..."):
-                        result = detect_badge_level(test_url, driver)
+                    with st.spinner("Analyzing your profile..."):
+                        result = debug_badge_detection(test_url, driver)
                         
-                        if result == "None":
-                            st.warning("❌ No Agentblazer badge detected")
-                        elif result == "Error":
-                            st.error("❌ Error processing profile")
+                        st.subheader("🎯 Final Result:")
+                        if result == "Innovator":
+                            st.success("🎉 **Badge Level: Innovator** ✅")
+                        elif result == "Champion":
+                            st.success("🎉 **Badge Level: Champion** ✅")
+                        elif result == "Legend":
+                            st.success("🎉 **Badge Level: Legend** ✅")
+                        elif result == "None":
+                            st.warning("❌ No badge detected - Check the debug info above")
                         else:
-                            st.success(f"🎉 **Badge Level: {result}**")
+                            st.error(f"❌ Error: {result}")
                             
-                            # Show which image was detected
-                            if result == "Champion":
-                                st.info("📷 Detected: `banner-level-1.png`")
-                            elif result == "Innovator":
-                                st.info("📷 Detected: `banner-level-2.png`")
-                            elif result == "Legend":
-                                st.info("📷 Detected: `banner-level-3.png`")
-                                
                 finally:
                     driver.quit()
             else:
-                st.error("❌ Could not setup browser. Install ChromeDriver first.")
-    
+                st.error("❌ Browser setup failed")
+
+    # Alternative: Manual URL Analysis
     st.divider()
+    st.subheader("🔧 Alternative: Direct URL Test")
     
-    # Batch processing
-    st.subheader("📂 Batch Processing")
-    
-    uploaded_file = st.file_uploader("Upload CSV File", type="csv")
-    
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
+    if st.button("Test Innovator Badge Image"):
+        # Test if the innovator badge image loads
+        test_img_url = "https://trailhead.salesforce.com/agentblazer/banner-level-2.png"
         
-        required_cols = ['Roll Number', 'Name', 'Salesforce URL']
-        if all(col in df.columns for col in required_cols):
-            
-            st.success(f"✅ Loaded {len(df)} records")
-            st.dataframe(df.head())
-            
-            if st.button("🚀 Process All Profiles"):
-                
-                driver = setup_driver()
-                if not driver:
-                    st.error("❌ Browser setup failed")
-                    return
-                
-                try:
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    results = []
-                    
-                    for idx, row in df.iterrows():
-                        progress = (idx + 1) / len(df)
-                        progress_bar.progress(progress)
-                        status_text.text(f"Processing {idx + 1}/{len(df)}: {row['Name']}")
-                        
-                        badge_level = detect_badge_level(row['Salesforce URL'], driver)
-                        
-                        results.append({
-                            'Roll Number': row['Roll Number'],
-                            'Name': row['Name'],
-                            'Salesforce URL': row['Salesforce URL'],
-                            'Badge Status': badge_level,
-                            'Level': {
-                                'Champion': 'Level 1',
-                                'Innovator': 'Level 2', 
-                                'Legend': 'Level 3',
-                                'None': 'None',
-                                'Error': 'Error'
-                            }.get(badge_level, 'Unknown')
-                        })
-                        
-                        # Small delay between requests
-                        time.sleep(2)
-                    
-                    # Show results
-                    results_df = pd.DataFrame(results)
-                    
-                    st.subheader("📊 Detection Results")
-                    st.dataframe(results_df)
-                    
-                    # Summary statistics
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total", len(results_df))
-                    with col2:
-                        champions = len(results_df[results_df['Badge Status'] == 'Champion'])
-                        st.metric("Champions", champions)
-                    with col3:
-                        innovators = len(results_df[results_df['Badge Status'] == 'Innovator'])
-                        st.metric("Innovators", innovators)
-                    with col4:
-                        legends = len(results_df[results_df['Badge Status'] == 'Legend'])
-                        st.metric("Legends", legends)
-                    
-                    # Success rate
-                    successful = len(results_df[results_df['Badge Status'].isin(['Champion', 'Innovator', 'Legend'])])
-                    success_rate = (successful / len(results_df)) * 100
-                    st.metric("Detection Success Rate", f"{success_rate:.1f}%")
-                    
-                    # Download results
-                    csv_data = results_df.to_csv(index=False)
-                    st.download_button(
-                        "📥 Download Results CSV",
-                        csv_data,
-                        "agentblazer_badge_results.csv",
-                        "text/csv"
-                    )
-                    
-                finally:
-                    driver.quit()
-                    
-        else:
-            st.error(f"❌ Missing required columns: {required_cols}")
+        try:
+            response = requests.get(test_img_url, timeout=10)
+            if response.status_code == 200:
+                st.success("✅ Innovator badge image URL is accessible")
+                st.image(test_img_url, caption="Agentblazer Innovator Badge")
+            else:
+                st.error(f"❌ Badge image not accessible: {response.status_code}")
+        except Exception as e:
+            st.error(f"❌ Error accessing badge image: {e}")
+    
+    # Quick fix suggestion
+    st.divider()
+    st.subheader("💡 Possible Issues & Solutions:")
+    
+    st.write("""
+    **Common reasons why badge detection fails:**
+    
+    1. **Badge not yet updated on profile** - Sometimes it takes time for badges to appear[79]
+    2. **Profile privacy settings** - Ensure your profile is public
+    3. **Different badge format** - Your badge might use a different image URL pattern
+    4. **Dynamic loading delay** - Badge images load slowly via JavaScript
+    
+    **Try this:**
+    - Wait 24-48 hours after earning the badge
+    - Check your profile visibility settings  
+    - Verify the badge appears when you visit your profile manually
+    """)
 
 if __name__ == "__main__":
     main()
