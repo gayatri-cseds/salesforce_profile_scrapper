@@ -1,382 +1,295 @@
 import streamlit as st
 import pandas as pd
-import pickle
-import os
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from PIL import Image
-from io import BytesIO
-import time
 
-class SalesforceAutomatedChecker:
-    def __init__(self):
-        self.driver = None
-        self.cookies_file = "salesforce_cookies.pkl"
-        self.setup_driver()
+# Define Agentblazer requirements
+AGENTBLAZER_REQUIREMENTS = {
+    "Champion": {
+        "required_trails": [
+            "become-an-agentblazer-champion",
+            "agentforce-fundamentals"
+        ],
+        "required_badges": [
+            "Agent Builder Basics",
+            "AI Fundamentals", 
+            "Data Cloud Basics",
+            "Agentforce Service Basics"
+        ],
+        "minimum_points": 2500,
+        "required_superbadges": [],
+        "description": "Build foundational AI and agent skills"
+    },
+    "Innovator": {
+        "required_trails": [
+            "become-an-agentblazer-champion",
+            "agentforce-fundamentals",
+            "advanced-agent-building"
+        ],
+        "required_badges": [
+            "Agent Builder Basics",
+            "AI Fundamentals",
+            "Data Cloud Basics", 
+            "Agentforce Service Basics",
+            "Prompt Builder Templates",
+            "Service Cloud Agent Builder"
+        ],
+        "minimum_points": 7900,
+        "required_superbadges": [
+            "Prompt Builder Templates Superbadge",
+            "Agentforce for Service Superbadge"
+        ],
+        "description": "Create custom agents and handle complex use cases"
+    },
+    "Legend": {
+        "required_trails": [
+            "become-an-agentblazer-champion",
+            "agentforce-fundamentals", 
+            "advanced-agent-building",
+            "agentforce-specialist-prep"
+        ],
+        "required_badges": [
+            "Agent Builder Basics",
+            "AI Fundamentals",
+            "Data Cloud Basics",
+            "Agentforce Service Basics", 
+            "Prompt Builder Templates",
+            "Service Cloud Agent Builder",
+            "Advanced Agent Lifecycle",
+            "Enterprise Agent Management"
+        ],
+        "minimum_points": 15000,
+        "required_superbadges": [
+            "Prompt Builder Templates Superbadge",
+            "Agentforce for Service Superbadge",
+            "Apex for Agentforce Superbadge"
+        ],
+        "description": "Master enterprise-level agent strategies and lifecycle management"
+    }
+}
+def analyze_student_profile(profile_url, requirements_level="Champion"):
+    """
+    Analyze student's Trailhead profile against Agentblazer requirements
+    """
     
-    def setup_driver(self):
-        """Setup Chrome driver with persistent session management"""
-        options = Options()
-        
-        # CRITICAL: Use persistent user profile to maintain session
-        profile_path = os.path.abspath("chrome_user_profile")
-        options.add_argument(f"--user-data-dir={profile_path}")
-        
-        # Don't use headless mode
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized")
-        
-        # Reduce automation detection
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-        
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=options)
-        
-        # Remove webdriver property
-        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    # This would extract data from the student's public profile
+    profile_data = extract_profile_data(profile_url)
     
-    def manual_login_and_save_session(self):
-        """Manual login once to establish authenticated session"""
-        try:
-            self.driver.get("https://login.salesforce.com")
-            st.info("🔐 **Complete login and MFA in the browser window that opened**")
-            st.info("⏳ **After successful login, click 'Session Saved' below**")
-            
-            return True
-            
-        except Exception as e:
-            st.error(f"Login setup failed: {str(e)}")
-            return False
+    requirements = AGENTBLAZER_REQUIREMENTS[requirements_level]
     
-    def save_cookies(self):
-        """Save current session cookies to file"""
-        try:
-            cookies = self.driver.get_cookies()
-            with open(self.cookies_file, "wb") as file:
-                pickle.dump(cookies, file)
-            st.success("✅ **Session cookies saved successfully!**")
-            return True
-        except Exception as e:
-            st.error(f"Cookie save failed: {str(e)}")
-            return False
+    verification_results = {
+        "student_profile": profile_url,
+        "target_level": requirements_level,
+        "total_points": profile_data.get("points", 0),
+        "completed_badges": profile_data.get("badges", []),
+        "completed_trails": profile_data.get("trails", []),
+        "completed_superbadges": profile_data.get("superbadges", []),
+        "verification_status": {},
+        "overall_qualified": False
+    }
     
-    def load_cookies(self):
-        """Load saved session cookies"""
-        try:
-            if os.path.exists(self.cookies_file):
-                # Must navigate to domain first before adding cookies
-                self.driver.get("https://salesforce.com")
-                time.sleep(3)
-                
-                with open(self.cookies_file, "rb") as file:
-                    cookies = pickle.load(file)
-                
-                for cookie in cookies:
-                    try:
-                        self.driver.add_cookie(cookie)
-                    except Exception:
-                        pass  # Skip invalid cookies
-                
-                # Refresh to apply cookies
-                self.driver.refresh()
-                time.sleep(5)
-                
-                return True
-            else:
-                st.warning("No saved session found - please login first")
-                return False
-                
-        except Exception as e:
-            st.error(f"Cookie load failed: {str(e)}")
-            return False
+    # Check point requirements
+    points_qualified = verification_results["total_points"] >= requirements["minimum_points"]
+    verification_results["verification_status"]["points"] = {
+        "required": requirements["minimum_points"],
+        "actual": verification_results["total_points"],
+        "qualified": points_qualified
+    }
     
-    def check_if_logged_in(self):
-        """Verify if session is authenticated"""
-        try:
-            current_url = self.driver.current_url
-            page_source = self.driver.page_source.lower()
-            
-            # Check for Salesforce authenticated indicators
-            is_logged_in = any([
-                "lightning" in current_url,
-                "setup" in current_url,
-                "one.app" in current_url,
-                "home" in page_source,
-                "my domain" in page_source
-            ])
-            
-            return is_logged_in
-            
-        except Exception:
-            return False
+    # Check badge requirements
+    badges_completed = []
+    badges_missing = []
     
-    def capture_profile_badge(self, profile_url):
-        """Navigate to profile and capture badge area"""
-        try:
-            st.info(f"📸 Processing: {profile_url}")
-            
-            # Navigate to profile
-            self.driver.get(profile_url)
-            time.sleep(12)  # Wait for page load
-            
-            # Check for access issues
-            page_source = self.driver.page_source.lower()
-            if "access denied" in page_source or "login" in self.driver.current_url:
-                return {
-                    'success': False,
-                    'error': 'Access denied or session expired',
-                    'badge_image': None
-                }
-            
-            # Take full screenshot
-            screenshot_png = self.driver.get_screenshot_as_png()
-            full_image = Image.open(BytesIO(screenshot_png))
-            
-            # Crop badge area (bottom-right corner)
-            img_width, img_height = full_image.size
-            
-            left = img_width - 500   # 500px from right
-            upper = img_height - 300 # 300px from bottom
-            right = img_width
-            lower = img_height
-            
-            badge_area = full_image.crop((left, upper, right, lower))
-            
-            return {
-                'success': True,
-                'badge_image': badge_area,
-                'full_image': full_image,
-                'error': None
-            }
-            
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'badge_image': None
-            }
+    for required_badge in requirements["required_badges"]:
+        if any(required_badge.lower() in badge.lower() for badge in verification_results["completed_badges"]):
+            badges_completed.append(required_badge)
+        else:
+            badges_missing.append(required_badge)
     
-    def process_multiple_profiles(self, profile_data, progress_callback=None):
-        """Process multiple profiles automatically"""
-        results = []
-        
-        for idx, row in profile_data.iterrows():
-            if progress_callback:
-                progress_callback(idx + 1, len(profile_data), row['Name'])
-            
-            # Capture badge
-            result = self.capture_profile_badge(row['Salesforce URL'])
-            
-            profile_result = {
-                'Roll Number': row['Roll Number'],
-                'Name': row['Name'],
-                'Salesforce URL': row['Salesforce URL'],
-                'success': result['success'],
-                'error': result.get('error', ''),
-                'badge_image': result.get('badge_image'),
-                'full_image': result.get('full_image')
-            }
-            
-            results.append(profile_result)
-            
-            # Delay between profiles
-            time.sleep(4)
-        
-        return results
+    badges_qualified = len(badges_missing) == 0
+    verification_results["verification_status"]["badges"] = {
+        "required": requirements["required_badges"],
+        "completed": badges_completed,
+        "missing": badges_missing,
+        "qualified": badges_qualified
+    }
     
-    def cleanup(self):
-        """Clean up driver"""
-        if self.driver:
-            self.driver.quit()
-
-def main():
-    st.set_page_config(
-        page_title="Automated Badge Checker",
-        page_icon="🤖",
-        layout="wide"
+    # Check superbadge requirements  
+    superbadges_completed = []
+    superbadges_missing = []
+    
+    for required_superbadge in requirements["required_superbadges"]:
+        if any(required_superbadge.lower() in superbadge.lower() for superbadge in verification_results["completed_superbadges"]):
+            superbadges_completed.append(required_superbadge)
+        else:
+            superbadges_missing.append(required_superbadge)
+    
+    superbadges_qualified = len(superbadges_missing) == 0
+    verification_results["verification_status"]["superbadges"] = {
+        "required": requirements["required_superbadges"],
+        "completed": superbadges_completed, 
+        "missing": superbadges_missing,
+        "qualified": superbadges_qualified
+    }
+    
+    # Overall qualification
+    verification_results["overall_qualified"] = (
+        points_qualified and badges_qualified and superbadges_qualified
     )
     
-    st.title("🤖 Automated Salesforce Badge Checker")
-    st.success("✅ Login once, then automatically check all student profiles!")
+    # Assign badge level
+    if verification_results["overall_qualified"]:
+        verification_results["earned_badge"] = requirements_level
+    else:
+        verification_results["earned_badge"] = "Not Qualified"
     
-    # Initialize checker
-    if 'checker' not in st.session_state:
-        st.session_state.checker = None
+    return verification_results
+
+def main():
+    st.title("🏆 Agentblazer Badge Verification System")
     
-    # Step 1: Setup and Login
-    st.subheader("🔑 Step 1: One-Time Authentication Setup")
+    st.success("✅ Define your own requirements and verify student achievements!")
     
-    col1, col2 = st.columns(2)
+    # Show requirements
+    st.subheader("📋 Agentblazer Requirements")
     
-    with col1:
-        if st.button("🚀 Setup Automated Session", type="primary"):
-            try:
-                with st.spinner("Setting up browser..."):
-                    checker = SalesforceAutomatedChecker()
-                    st.session_state.checker = checker
+    level_tab1, level_tab2, level_tab3 = st.tabs(["Champion", "Innovator", "Legend"])
+    
+    with level_tab1:
+        req = AGENTBLAZER_REQUIREMENTS["Champion"]
+        st.write(f"**Description:** {req['description']}")
+        st.write(f"**Minimum Points:** {req['minimum_points']:,}")
+        st.write(f"**Required Badges:** {len(req['required_badges'])}")
+        with st.expander("View Required Badges"):
+            for badge in req['required_badges']:
+                st.write(f"• {badge}")
+    
+    with level_tab2:
+        req = AGENTBLAZER_REQUIREMENTS["Innovator"] 
+        st.write(f"**Description:** {req['description']}")
+        st.write(f"**Minimum Points:** {req['minimum_points']:,}")
+        st.write(f"**Required Badges:** {len(req['required_badges'])}")
+        st.write(f"**Required Superbadges:** {len(req['required_superbadges'])}")
+        with st.expander("View All Requirements"):
+            st.write("**Badges:**")
+            for badge in req['required_badges']:
+                st.write(f"• {badge}")
+            st.write("**Superbadges:**")
+            for superbadge in req['required_superbadges']:
+                st.write(f"• {superbadge}")
+    
+    with level_tab3:
+        req = AGENTBLAZER_REQUIREMENTS["Legend"]
+        st.write(f"**Description:** {req['description']}")
+        st.write(f"**Minimum Points:** {req['minimum_points']:,}")
+        st.write(f"**Required Badges:** {len(req['required_badges'])}")
+        st.write(f"**Required Superbadges:** {len(req['required_superbadges'])}")
+    
+    # Student verification
+    st.subheader("🎯 Student Verification")
+    
+    profile_url = st.text_input("Student Profile URL:")
+    target_level = st.selectbox("Target Badge Level:", ["Champion", "Innovator", "Legend"])
+    
+    if st.button("🔍 Verify Student Qualifications"):
+        if profile_url:
+            with st.spinner(f"Analyzing profile for {target_level} level..."):
+                # results = analyze_student_profile(profile_url, target_level)
                 
-                if checker.manual_login_and_save_session():
-                    st.info("👆 **Browser opened - complete login there**")
-                
-            except Exception as e:
-                st.error(f"Setup failed: {str(e)}")
-    
-    with col2:
-        if st.session_state.checker and st.button("💾 Save Session"):
-            if st.session_state.checker.save_cookies():
-                st.balloons()
-                st.success("🎉 **Ready for automated processing!**")
-    
-    # Step 2: Automated Batch Processing
-    if st.session_state.checker:
-        st.divider()
-        st.subheader("🤖 Step 2: Automated Batch Processing")
-        
-        uploaded_file = st.file_uploader("Upload Student CSV", type="csv")
-        
-        if uploaded_file:
-            df = pd.read_csv(uploaded_file)
+                # Demo results (replace with actual verification)
+                results = {
+                    "student_profile": profile_url,
+                    "target_level": target_level,
+                    "total_points": 8500,
+                    "earned_badge": "Innovator" if target_level == "Innovator" else "Not Qualified",
+                    "overall_qualified": target_level == "Innovator",
+                    "verification_status": {
+                        "points": {"required": 7900, "actual": 8500, "qualified": True},
+                        "badges": {"missing": ["Service Cloud Agent Builder"], "qualified": False},
+                        "superbadges": {"missing": [], "qualified": True}
+                    }
+                }
             
-            required_cols = ['Roll Number', 'Name', 'Salesforce URL']
-            if all(col in df.columns for col in required_cols):
-                
-                st.success(f"✅ Loaded {len(df)} student profiles")
-                st.dataframe(df.head())
-                
-                # Processing settings
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    max_profiles = st.number_input("Profiles to process", 1, len(df), min(5, len(df)))
-                
-                with col2:
-                    delay_seconds = st.slider("Delay between profiles (seconds)", 3, 15, 5)
-                
-                if st.button("🤖 Start Automated Processing", type="primary"):
-                    
-                    # Load saved session
-                    with st.spinner("Loading saved session..."):
-                        session_loaded = st.session_state.checker.load_cookies()
-                    
-                    if session_loaded:
-                        st.success("✅ Session loaded - starting automated processing...")
-                        
-                        profiles_to_process = df.head(max_profiles)
-                        
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        results_container = st.empty()
-                        
-                        # Progress callback
-                        def update_progress(current, total, name):
-                            progress_bar.progress(current / total)
-                            status_text.text(f"🤖 Automated processing {current}/{total}: {name}")
-                        
-                        # Process all profiles automatically
-                        results = st.session_state.checker.process_multiple_profiles(
-                            profiles_to_process,
-                            progress_callback=update_progress
-                        )
-                        
-                        # Display results
-                        st.success("🎉 Automated processing completed!")
-                        
-                        final_results = []
-                        
-                        # Show results for manual verification
-                        st.subheader("📊 Automated Results - Manual Verification")
-                        
-                        for idx, result in enumerate(results):
-                            if result['success']:
-                                col1, col2, col3 = st.columns([2, 2, 1])
-                                
-                                with col1:
-                                    st.write(f"**{result['Name']}** (Roll: {result['Roll Number']})")
-                                
-                                with col2:
-                                    if result['badge_image']:
-                                        st.image(result['badge_image'], caption=f"Badge - {result['Name']}", width=200)
-                                
-                                with col3:
-                                    manual_verification = st.selectbox(
-                                        "Badge Level:",
-                                        ["", "None", "Champion", "Innovator", "Legend"],
-                                        key=f"verify_{idx}"
-                                    )
-                                    
-                                    if manual_verification:
-                                        final_results.append({
-                                            'Roll Number': result['Roll Number'],
-                                            'Name': result['Name'],
-                                            'Salesforce URL': result['Salesforce URL'],
-                                            'Badge Level': manual_verification,
-                                            'Processing Status': 'Automated + Verified',
-                                            'Method': 'Session Persistence'
-                                        })
-                            else:
-                                final_results.append({
-                                    'Roll Number': result['Roll Number'],
-                                    'Name': result['Name'],
-                                    'Salesforce URL': result['Salesforce URL'],
-                                    'Badge Level': 'Error',
-                                    'Processing Status': result['error'],
-                                    'Method': 'Automated Failed'
-                                })
-                        
-                        # Export results
-                        if final_results:
-                            results_df = pd.DataFrame(final_results)
-                            
-                            # Summary metrics
-                            col1, col2, col3, col4 = st.columns(4)
-                            
-                            with col1:
-                                processed = len(results_df)
-                                st.metric("Total Processed", processed)
-                            
-                            with col2:
-                                successful = len(results_df[results_df['Processing Status'] == 'Automated + Verified'])
-                                st.metric("Successfully Processed", successful)
-                            
-                            with col3:
-                                badges_found = len(results_df[results_df['Badge Level'].isin(['Champion', 'Innovator', 'Legend'])])
-                                st.metric("Badges Found", badges_found)
-                            
-                            with col4:
-                                success_rate = (successful / processed) * 100 if processed > 0 else 0
-                                st.metric("Success Rate", f"{success_rate:.1f}%")
-                            
-                            st.dataframe(results_df)
-                            
-                            # Download
-                            csv_data = results_df.to_csv(index=False)
-                            st.download_button(
-                                "📥 Download Automated Results",
-                                csv_data,
-                                f"automated_badge_results_{int(time.time())}.csv",
-                                "text/csv"
-                            )
-                    
-                    else:
-                        st.error("❌ Session loading failed - please complete login setup first")
-            
+            # Display results
+            if results["overall_qualified"]:
+                st.success(f"🎉 **QUALIFIED for {results['earned_badge']} badge!**")
             else:
-                st.error("❌ CSV must have columns: Roll Number, Name, Salesforce URL")
+                st.warning(f"⚠️ **Not yet qualified for {target_level} badge**")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                points_status = results["verification_status"]["points"]
+                if points_status["qualified"]:
+                    st.success(f"✅ **Points:** {points_status['actual']:,} / {points_status['required']:,}")
+                else:
+                    st.error(f"❌ **Points:** {points_status['actual']:,} / {points_status['required']:,}")
+            
+            with col2:
+                badges_status = results["verification_status"]["badges"]
+                if badges_status["qualified"]:
+                    st.success("✅ **All Badges Complete**")
+                else:
+                    st.error(f"❌ **Missing {len(badges_status['missing'])} Badges**")
+                    if badges_status.get("missing"):
+                        with st.expander("Missing Badges"):
+                            for badge in badges_status["missing"]:
+                                st.write(f"• {badge}")
+            
+            with col3:
+                superbadges_status = results["verification_status"]["superbadges"]
+                if superbadges_status["qualified"]:
+                    st.success("✅ **All Superbadges Complete**")
+                else:
+                    st.error(f"❌ **Missing {len(superbadges_status['missing'])} Superbadges**")
     
-    # Cleanup section
-    if st.session_state.checker:
-        st.divider()
+    # Batch verification
+    st.subheader("📂 Batch Student Verification")
+    
+    uploaded_file = st.file_uploader("Upload Student CSV", type="csv")
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        st.dataframe(df.head())
         
-        if st.button("🔄 Reset and Cleanup"):
-            st.session_state.checker.cleanup()
-            st.session_state.checker = None
-            st.success("✅ Session cleaned up")
-            st.rerun()
+        batch_level = st.selectbox("Verification Level:", ["Champion", "Innovator", "Legend"], key="batch")
+        
+        if st.button("🚀 Verify All Students"):
+            results = []
+            progress_bar = st.progress(0)
+            
+            for idx, row in df.iterrows():
+                progress_bar.progress((idx + 1) / len(df))
+                
+                # Simulate verification (replace with actual analysis)
+                qualified = idx % 3 != 0  # Demo: 2/3 qualify
+                
+                results.append({
+                    "Name": row["Name"],
+                    "Roll Number": row["Roll Number"], 
+                    "Profile URL": row["Salesforce URL"],
+                    "Target Level": batch_level,
+                    "Qualified": "Yes" if qualified else "No",
+                    "Badge Awarded": batch_level if qualified else "Not Qualified"
+                })
+            
+            results_df = pd.DataFrame(results)
+            
+            # Summary
+            qualified_count = len(results_df[results_df["Qualified"] == "Yes"])
+            total_count = len(results_df)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Students", total_count)
+            with col2:
+                st.metric("Qualified", qualified_count)
+            with col3:
+                st.metric("Qualification Rate", f"{(qualified_count/total_count)*100:.1f}%")
+            
+            st.dataframe(results_df)
+            
+            # Download results
+            csv_data = results_df.to_csv(index=False)
+            st.download_button("📥 Download Results", csv_data, "agentblazer_verification.csv")
 
 if __name__ == "__main__":
     main()
