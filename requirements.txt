@@ -9,3 +9,5 @@ Pillow
 pytesseract
 opencv-python
 numpy
+scrapy
+twisted
