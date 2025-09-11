@@ -30,7 +30,6 @@ AGENTBLAZER_REQUIREMENTS = {
             "Data Cloud Basics", 
             "Agentforce Service Basics",
             "Prompt Builder Templates",
-            "Service Cloud Agent Builder"
         ],
         "minimum_points": 7900,
         "required_superbadges": [
