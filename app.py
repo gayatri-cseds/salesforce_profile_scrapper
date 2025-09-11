@@ -9,230 +9,258 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import time
 import re
+from PIL import Image
+import pytesseract
+import io
+import cv2
+import numpy as np
 
 def setup_driver():
-    """Setup Chrome driver with debugging enabled"""
+    """Setup Chrome driver"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
     try:
         driver = webdriver.Chrome(options=options)
         return driver
     except Exception as e:
-        st.error(f"Chrome driver setup failed: {e}")
+        st.error(f"Chrome setup failed: {e}")
         return None
 
-def debug_badge_detection(profile_url, driver):
+def extract_text_from_image_url(image_url):
     """
-    Debug version that shows exactly what's found on the page
+    Download image from URL and extract text using OCR
     """
     try:
-        st.info(f"🔍 Loading: {profile_url}")
-        driver.get(profile_url)
+        # Download the image
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
-        # Wait for page load
+        response = requests.get(image_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        # Convert to PIL Image
+        image = Image.open(io.BytesIO(response.content))
+        
+        # Convert to numpy array for OpenCV processing
+        img_array = np.array(image)
+        
+        # Convert RGB to BGR for OpenCV
+        if len(img_array.shape) == 3:
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        # Enhance image for better OCR
+        # Convert to grayscale
+        if len(img_array.shape) == 3:
+            gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img_array
+            
+        # Apply image processing for better OCR
+        # Increase contrast
+        gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=20)
+        
+        # Apply threshold to get black text on white background
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Convert back to PIL Image
+        processed_image = Image.fromarray(thresh)
+        
+        # Extract text using Tesseract
+        extracted_text = pytesseract.image_to_string(processed_image, config='--psm 8').strip()
+        
+        return extracted_text.lower()
+        
+    except Exception as e:
+        st.error(f"Error extracting text from image: {e}")
+        return ""
+
+def detect_badge_from_images(profile_url, driver):
+    """
+    Find agentblazer images and extract text to determine badge level
+    """
+    try:
+        # Load profile page
+        driver.get(profile_url)
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
+        time.sleep(5)
         
-        # Additional wait for dynamic content
-        time.sleep(8)  # Increased wait time
-        
-        # Get page source
+        # Get all images
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-        
-        # Debug: Show all images found
-        st.subheader("🖼️ All Images Found on Page:")
         images = soup.find_all('img')
-        st.write(f"Total images found: {len(images)}")
         
+        # Look for agentblazer banner images
         agentblazer_images = []
-        for idx, img in enumerate(images):
+        
+        for img in images:
             src = str(img.get('src', ''))
             alt = str(img.get('alt', ''))
             
-            # Show first 10 images for debugging
-            if idx < 10:
-                st.write(f"**Image {idx + 1}:**")
-                st.write(f"- src: `{src}`")
-                st.write(f"- alt: `{alt}`")
+            # Check if it's an agentblazer banner image
+            if ('agentblazer' in src.lower() and 'banner' in src.lower()) or \
+               ('agentblazer' in alt.lower()):
                 
-            # Check for agentblazer patterns
-            if 'agentblazer' in src.lower() or 'agentblazer' in alt.lower():
-                agentblazer_images.append({'src': src, 'alt': alt})
+                # Convert relative URLs to absolute
+                if src.startswith('/'):
+                    src = 'https://trailhead.salesforce.com' + src
+                elif not src.startswith('http'):
+                    src = 'https://trailhead.salesforce.com/' + src
+                    
+                agentblazer_images.append({
+                    'src': src,
+                    'alt': alt
+                })
         
-        st.subheader("🤖 Agentblazer Images Found:")
-        if agentblazer_images:
-            for img in agentblazer_images:
-                st.write(f"- **src:** `{img['src']}`")
-                st.write(f"- **alt:** `{img['alt']}`")
-        else:
-            st.warning("❌ No agentblazer images found")
+        st.info(f"Found {len(agentblazer_images)} agentblazer images")
         
-        # Debug: Search for any "level" or "banner" text
-        st.subheader("🔍 Text Content Analysis:")
-        page_text = soup.get_text().lower()
+        # Process each agentblazer image
+        for img_info in agentblazer_images:
+            st.write(f"Processing image: {img_info['src']}")
+            
+            # Extract text from the image
+            extracted_text = extract_text_from_image_url(img_info['src'])
+            
+            st.write(f"Extracted text: '{extracted_text}'")
+            
+            # Determine badge level from extracted text
+            if any(word in extracted_text for word in ['legend', 'level 3', 'level3']):
+                return 'Legend'
+            elif any(word in extracted_text for word in ['innovator', 'level 2', 'level2']):
+                return 'Innovator'
+            elif any(word in extracted_text for word in ['champion', 'level 1', 'level1']):
+                return 'Champion'
+            
+            # Also check alt text as backup
+            alt_lower = img_info['alt'].lower()
+            if 'legend' in alt_lower:
+                return 'Legend'
+            elif 'innovator' in alt_lower:
+                return 'Innovator'
+            elif 'champion' in alt_lower:
+                return 'Champion'
         
-        level_keywords = ['level-1', 'level-2', 'level-3', 'banner-level', 'innovator', 'champion', 'legend', 'agentblazer']
-        found_keywords = []
-        
-        for keyword in level_keywords:
-            if keyword in page_text:
-                found_keywords.append(keyword)
-        
-        if found_keywords:
-            st.success(f"✅ Found keywords: {', '.join(found_keywords)}")
-        else:
-            st.warning("❌ No relevant keywords found in page text")
-        
-        # Debug: Check for specific div/span elements
-        st.subheader("🏷️ Badge-related Elements:")
-        badge_elements = soup.find_all(['div', 'span', 'section'], 
-                                     class_=re.compile(r'badge|level|agentblazer|innovator|champion|legend', re.I))
-        
-        if badge_elements:
-            for idx, elem in enumerate(badge_elements[:5]):  # Show first 5
-                st.write(f"**Element {idx + 1}:**")
-                st.write(f"- Tag: `{elem.name}`")
-                st.write(f"- Classes: `{elem.get('class', [])}`")
-                st.write(f"- Text: `{elem.get_text().strip()[:100]}...`")
-        else:
-            st.warning("❌ No badge-related elements found")
-        
-        # Enhanced badge detection
-        badge_level = enhanced_badge_detection(soup)
-        
-        return badge_level
+        return 'None'
         
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return "Error"
+        st.error(f"Error detecting badge: {e}")
+        return 'Error'
 
-def enhanced_badge_detection(soup):
-    """Enhanced detection with multiple fallback methods"""
+def test_direct_image_ocr():
+    """
+    Test OCR on the known innovator badge image
+    """
+    st.subheader("🧪 Test Direct Image OCR")
     
-    # Method 1: Direct image src matching
-    images = soup.find_all('img')
-    for img in images:
-        src = str(img.get('src', ''))
-        alt = str(img.get('alt', ''))
-        
-        # Check for exact patterns
-        if re.search(r'banner-level-3|level.*3', src, re.IGNORECASE):
-            return "Legend"
-        elif re.search(r'banner-level-2|level.*2', src, re.IGNORECASE):
-            return "Innovator"
-        elif re.search(r'banner-level-1|level.*1', src, re.IGNORECASE):
-            return "Champion"
-        
-        # Check alt text
-        if 'innovator' in alt.lower():
-            return "Innovator"
-        elif 'champion' in alt.lower():
-            return "Champion"
-        elif 'legend' in alt.lower():
-            return "Legend"
+    # Test with the known innovator badge URL
+    test_image_url = "https://trailhead.salesforce.com/agentblazer/banner-level-2.png"
     
-    # Method 2: Text-based detection
-    page_text = soup.get_text().lower()
-    
-    if any(word in page_text for word in ['agentblazer legend', 'banner-level-3']):
-        return "Legend"
-    elif any(word in page_text for word in ['agentblazer innovator', 'banner-level-2']):
-        return "Innovator"
-    elif any(word in page_text for word in ['agentblazer champion', 'banner-level-1']):
-        return "Champion"
-    
-    # Method 3: CSS class detection
-    badge_elements = soup.find_all(attrs={'class': re.compile(r'agentblazer|badge|level', re.I)})
-    
-    for elem in badge_elements:
-        text = elem.get_text().lower()
-        classes = ' '.join(elem.get('class', [])).lower()
-        
-        if any(word in text or word in classes for word in ['innovator', 'level-2', 'level 2']):
-            return "Innovator"
-        elif any(word in text or word in classes for word in ['champion', 'level-1', 'level 1']):
-            return "Champion"
-        elif any(word in text or word in classes for word in ['legend', 'level-3', 'level 3']):
-            return "Legend"
-    
-    return "None"
+    if st.button("Test OCR on Innovator Badge Image"):
+        with st.spinner("Extracting text from badge image..."):
+            extracted_text = extract_text_from_image_url(test_image_url)
+            
+            st.success(f"✅ Extracted text: '{extracted_text}'")
+            
+            # Show the image for reference
+            try:
+                st.image(test_image_url, caption="Agentblazer Innovator Badge", width=300)
+            except:
+                pass
+            
+            # Determine badge level
+            if 'innovator' in extracted_text.lower() or 'level 2' in extracted_text.lower():
+                st.success("🎉 **Detected: Innovator Badge!**")
+            else:
+                st.warning("⚠️ Badge level unclear from OCR text")
 
 def main():
-    st.title("🐛 Enhanced Badge Detector with Debugging")
-    st.success("This version shows exactly what's being detected on your profile")
+    st.title("🔍 OCR-Based Badge Detector")
+    st.success("✅ Uses OCR to extract text directly from badge images!")
     
-    # Test URL input
-    test_url = st.text_input(
-        "Your Profile URL:", 
-        placeholder="Enter your trailblazer profile URL"
+    # Test direct OCR first
+    test_direct_image_ocr()
+    
+    st.divider()
+    
+    # Profile testing
+    st.subheader("👤 Test Your Profile")
+    
+    profile_url = st.text_input(
+        "Your Profile URL:",
+        placeholder="https://trailblazer.me/id/username"
     )
     
-    if st.button("🔍 Debug Badge Detection"):
-        if test_url:
+    if st.button("🔍 Detect Badge with OCR"):
+        if profile_url:
             driver = setup_driver()
             if driver:
                 try:
-                    with st.spinner("Analyzing your profile..."):
-                        result = debug_badge_detection(test_url, driver)
+                    with st.spinner("Analyzing profile with OCR..."):
+                        result = detect_badge_from_images(profile_url, driver)
                         
-                        st.subheader("🎯 Final Result:")
-                        if result == "Innovator":
-                            st.success("🎉 **Badge Level: Innovator** ✅")
-                        elif result == "Champion":
-                            st.success("🎉 **Badge Level: Champion** ✅")
-                        elif result == "Legend":
-                            st.success("🎉 **Badge Level: Legend** ✅")
-                        elif result == "None":
-                            st.warning("❌ No badge detected - Check the debug info above")
+                        if result in ['Champion', 'Innovator', 'Legend']:
+                            st.success(f"🎉 **Badge Detected: {result}**")
+                        elif result == 'None':
+                            st.warning("❌ No badge detected")
                         else:
                             st.error(f"❌ Error: {result}")
                             
                 finally:
                     driver.quit()
-            else:
-                st.error("❌ Browser setup failed")
-
-    # Alternative: Manual URL Analysis
-    st.divider()
-    st.subheader("🔧 Alternative: Direct URL Test")
     
-    if st.button("Test Innovator Badge Image"):
-        # Test if the innovator badge image loads
-        test_img_url = "https://trailhead.salesforce.com/agentblazer/banner-level-2.png"
+    st.divider()
+    
+    # Batch processing
+    st.subheader("📂 Batch Processing with OCR")
+    
+    uploaded_file = st.file_uploader("Upload CSV", type="csv")
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
         
-        try:
-            response = requests.get(test_img_url, timeout=10)
-            if response.status_code == 200:
-                st.success("✅ Innovator badge image URL is accessible")
-                st.image(test_img_url, caption="Agentblazer Innovator Badge")
-            else:
-                st.error(f"❌ Badge image not accessible: {response.status_code}")
-        except Exception as e:
-            st.error(f"❌ Error accessing badge image: {e}")
-    
-    # Quick fix suggestion
-    st.divider()
-    st.subheader("💡 Possible Issues & Solutions:")
-    
-    st.write("""
-    **Common reasons why badge detection fails:**
-    
-    1. **Badge not yet updated on profile** - Sometimes it takes time for badges to appear[79]
-    2. **Profile privacy settings** - Ensure your profile is public
-    3. **Different badge format** - Your badge might use a different image URL pattern
-    4. **Dynamic loading delay** - Badge images load slowly via JavaScript
-    
-    **Try this:**
-    - Wait 24-48 hours after earning the badge
-    - Check your profile visibility settings  
-    - Verify the badge appears when you visit your profile manually
-    """)
+        if all(col in df.columns for col in ['Roll Number', 'Name', 'Salesforce URL']):
+            st.dataframe(df.head())
+            
+            if st.button("🚀 Process All with OCR"):
+                driver = setup_driver()
+                if driver:
+                    try:
+                        results = []
+                        progress = st.progress(0)
+                        
+                        for idx, row in df.iterrows():
+                            progress.progress((idx + 1) / len(df))
+                            
+                            badge_level = detect_badge_from_images(row['Salesforce URL'], driver)
+                            
+                            results.append({
+                                'Roll Number': row['Roll Number'],
+                                'Name': row['Name'],
+                                'Badge Status': badge_level,
+                                'Level': {
+                                    'Champion': 'Level 1',
+                                    'Innovator': 'Level 2',
+                                    'Legend': 'Level 3',
+                                    'None': 'None'
+                                }.get(badge_level, 'Unknown')
+                            })
+                            
+                            time.sleep(2)  # Be respectful to servers
+                        
+                        results_df = pd.DataFrame(results)
+                        st.dataframe(results_df)
+                        
+                        # Download results
+                        csv_data = results_df.to_csv(index=False)
+                        st.download_button("📥 Download Results", csv_data, "ocr_badge_results.csv")
+                        
+                    finally:
+                        driver.quit()
 
 if __name__ == "__main__":
     main()
