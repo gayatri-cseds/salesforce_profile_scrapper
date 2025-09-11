@@ -118,3 +118,4 @@ def check_profile_accessibility(url, driver):
             
     except Exception as e:
         return "Error"
+
