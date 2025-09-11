@@ -1,26 +1,25 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import re
 
+# --- Badge Extractor Function ---
 def fetch_badge_status(profile_url):
-    """Fetch Salesforce Trailblazer badge status using <img alt> attribute"""
+    """Fetch Salesforce Trailblazer badge status by scanning raw HTML"""
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(profile_url, headers=headers, timeout=10)
         res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
+        html = res.text
 
-        # Find the image with "banner-level" in its src
-        img_tag = soup.find("img", {"src": re.compile(r"banner-level-\d+\.png")})
-        if img_tag and img_tag.get("alt"):
-            return img_tag["alt"]  # keep exact alt text (e.g., "Agentblazer Innovator")
+        # Look for banner image and alt text
+        match = re.search(r'banner-level-\d+\.png"[^>]*alt="([^"]+)"', html)
+        if match:
+            return match.group(1)   # exact alt text (e.g., "Agentblazer Innovator")
 
         return "None"  # No badge found
     except Exception:
         return "None"
-
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Salesforce Badge Dashboard", page_icon="🏆", layout="wide")
@@ -39,7 +38,7 @@ if uploaded_file is not None:
     else:
         st.info("Fetching badge data... Please wait ⏳")
 
-        # Extract badge status
+        # Extract badge status for each profile
         df["badge_status"] = df["profile_url"].apply(fetch_badge_status)
 
         # Keep only required columns
